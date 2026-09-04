@@ -19,10 +19,13 @@ module PromptOn
   # bundle. Then #ensure_document fetches once in the calling thread, because there is nothing
   # else to serve.
   class SnapshotPoller
-    def initialize(config, store, http)
+    # +clock+ is the monotonic clock, injectable so a test can pretend the host booted a moment
+    # ago — the reading a cold start used to get wrong.
+    def initialize(config, store, http, clock: nil)
       @config = config
       @store = store
       @http = http
+      @clock = clock || -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) }
       @mutex = Mutex.new
       @attempt_mutex = Mutex.new
       @wake = ConditionVariable.new
@@ -32,6 +35,7 @@ module PromptOn
       @refreshing = false
       @stopped = false
       @thread = nil
+      @refresh_thread = nil
     end
 
     # Starts the background poll loop. A no-op unless polling is enabled and remote calls are
@@ -47,6 +51,8 @@ module PromptOn
       self
     end
 
+    # Stops the poll loop and waits briefly for an in-flight background refresh, so a script that
+    # resolves once and exits still gets that refresh's disk write.
     def stop
       @mutex.synchronize do
         @stopped = true
@@ -54,6 +60,8 @@ module PromptOn
       end
       @thread&.join(2)
       @thread = nil
+      @mutex.synchronize { @refresh_thread }&.join(2)
+      @mutex.synchronize { @refresh_thread = nil }
       self
     end
 
@@ -63,11 +71,14 @@ module PromptOn
       return if !@config.remote? || @thread&.alive?
       return unless claim_refresh
 
-      Thread.new do
+      thread = Thread.new do
         attempt(only_if_due: true)
       ensure
         @mutex.synchronize { @refreshing = false }
       end
+      thread.name = "prompton-snapshot-refresh"
+      thread.abort_on_exception = false
+      @mutex.synchronize { @refresh_thread = thread }
       nil
     end
 
@@ -156,13 +167,18 @@ module PromptOn
 
     # Seconds until the server may be contacted again: the cache TTL since the last attempt, or
     # the backoff / Retry-After window, whichever is later.
+    #
+    # Having never attempted a fetch means "due now", not "due at absolute time cache_ttl": the
+    # clock is monotonic and starts near zero at boot, so treating a missing @last_attempt as 0.0
+    # would hold the very first fetch back for the whole TTL on a freshly booted host.
     def due_in
       @mutex.synchronize { due_in_locked }
     end
 
     def due_in_locked
-      due_at = [(@last_attempt || 0.0) + @config.cache_ttl, @next_allowed_at].max
-      [due_at - now, 0.0].max
+      current = now
+      due_at = [@last_attempt ? @last_attempt + @config.cache_ttl : current, @next_allowed_at].max
+      [due_at - current, 0.0].max
     end
 
     def perform(raise_on_error: false)
@@ -224,7 +240,7 @@ module PromptOn
     end
 
     def now
-      Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      @clock.call
     end
   end
 end

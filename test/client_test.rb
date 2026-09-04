@@ -83,12 +83,14 @@ class ClientTest < Minitest::Test
 
   # --- log -----------------------------------------------------------------
 
-  def test_log_fills_the_id_started_at_and_sdk_fields
+  def test_log_fills_the_id_and_sdk_fields_and_keeps_the_started_at_it_was_given
     client = build_client(mode: :test)
-    logged = client.log("use_case" => "greeting", "model" => "m", "status" => "ok")
+    started_at = (Time.now.utc - 300).iso8601(6)
+    logged = client.log("use_case" => "greeting", "model" => "m", "status" => "ok",
+                        "started_at" => started_at)
 
     assert_match(/\A\h{8}-\h{4}-7\h{3}-/, logged["id"])
-    assert Time.iso8601(logged["started_at"])
+    assert_equal started_at, logged["started_at"], "a record built after the fact keeps its own clock"
     assert_equal({ "name" => "prompton-ruby", "version" => PromptOn::VERSION }, logged["sdk"])
   end
 
@@ -98,6 +100,13 @@ class ClientTest < Minitest::Test
     error = assert_raises(PromptOn::InvalidRecordError) { client.log("model" => "m", "status" => "ok") }
     assert_equal "use_case", error.field
     assert_raises(PromptOn::InvalidRecordError) { client.log("use_case" => "greeting", "status" => "ok") }
+
+    # started_at is never guessed: a record for a generation that ran minutes ago would otherwise
+    # be stamped with the enqueue time and quietly corrupt every latency and time series.
+    missing = assert_raises(PromptOn::InvalidRecordError) do
+      client.log("use_case" => "greeting", "model" => "m", "status" => "ok")
+    end
+    assert_equal "started_at", missing.field
   end
 
   def test_log_takes_the_resolution_evidence_from_a_resolution
@@ -105,7 +114,8 @@ class ClientTest < Minitest::Test
     client.put_snapshot(snapshot_document)
     resolution = client.resolve("greeting", prompt: "ko")
 
-    logged = client.log({ "status" => "ok" }, resolution: resolution)
+    logged = client.log({ "status" => "ok", "started_at" => Time.now.utc.iso8601(6) },
+                        resolution: resolution)
 
     assert_equal "greeting", logged["use_case"]
     assert_equal "ko", logged["prompt"]
@@ -118,7 +128,7 @@ class ClientTest < Minitest::Test
   def test_symbol_keys_are_accepted_and_normalised
     client = build_client(mode: :test)
     logged = client.log(use_case: "greeting", model: "m", status: "ok",
-                        context: { language: "ko" })
+                        started_at: Time.now.utc.iso8601(6), context: { language: "ko" })
 
     assert_equal({ "language" => "ko" }, logged["context"])
   end
@@ -130,7 +140,8 @@ class ClientTest < Minitest::Test
     client = build_client(mode: :test)
     client.put_snapshot(document)
 
-    logged = client.log({ "status" => "ok", "input" => "secret prompt" },
+    logged = client.log({ "status" => "ok", "input" => "secret prompt",
+                          "started_at" => Time.now.utc.iso8601(6) },
                         resolution: client.resolve("greeting"))
 
     assert_equal %w[bytes hashed sha256], logged["input"].keys.sort
@@ -142,7 +153,7 @@ class ClientTest < Minitest::Test
                           redact: ->(gen) { gen.merge("metadata" => { "redacted" => true }) })
 
     logged = client.log("use_case" => "greeting", "model" => "m", "status" => "ok",
-                        "end_user_ref" => "user-42")
+                        "started_at" => Time.now.utc.iso8601(6), "end_user_ref" => "user-42")
 
     assert_equal Digest::SHA256.hexdigest("user-42"), logged["end_user_ref"]
     assert_equal({ "redacted" => true }, logged["metadata"])
@@ -241,6 +252,27 @@ class ClientTest < Minitest::Test
     assert(@logger.lines.any? { |line| line.include?("could not record the monitoring log") })
   end
 
+  # --- lifecycle -----------------------------------------------------------
+
+  def test_the_exit_drain_forgets_a_closed_client_and_holds_the_rest_weakly
+    before = PromptOn::Client.open_at_exit.length
+    client = build_client(mode: :offline, flush_on_exit: true)
+
+    assert_equal before + 1, PromptOn::Client.open_at_exit.length
+
+    client.close
+
+    assert_equal before, PromptOn::Client.open_at_exit.length, "a closed client leaves the drain"
+
+    # Ruby cannot unregister an at_exit block, so a client per request or per test would pile up
+    # for the life of the process if the drain held them strongly.
+    60.times { PromptOn::Client.new(**client_options(logger: @logger, mode: :offline, flush_on_exit: true)) }
+    3.times { GC.start }
+
+    assert_operator PromptOn::Client.open_at_exit.length, :<, before + 60,
+                    "clients that went out of scope are collected, not kept alive until exit"
+  end
+
   # --- module-level default client -----------------------------------------
 
   def test_the_module_delegates_to_a_replaceable_default_client
@@ -256,7 +288,8 @@ class ClientTest < Minitest::Test
   private
 
   def record
-    { "use_case" => "greeting", "model" => "openai/gpt-4o-mini", "status" => "ok" }
+    { "use_case" => "greeting", "model" => "openai/gpt-4o-mini", "status" => "ok",
+      "started_at" => Time.now.utc.iso8601(6) }
   end
 
   def build_client(**overrides)

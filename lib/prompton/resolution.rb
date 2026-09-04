@@ -60,10 +60,37 @@ module PromptOn
       end
     end
 
+    # A copy carrying the rendered prompt in place of the template, so a caller that asked for a
+    # resolution with variables can read #messages or #text and send them straight to the
+    # provider. Embedding use cases have no prompt and come back unchanged.
+    def with_rendered(rendered)
+      case kind
+      when "chat" then with(messages: rendered)
+      when "text" then with(text: rendered)
+      else self
+      end
+    end
+
+    # A copy with some attributes replaced.
+    def with(**overrides)
+      Resolution.new(**to_attributes, **overrides)
+    end
+
     # The input variables the pinned prompt reads, sorted.
     def detected_variables
       sources = kind == "chat" ? Array(messages).map { |m| m["content"].to_s } : [text.to_s]
       sources.flat_map { |source| Template.variables(source) }.uniq.sort
+    end
+
+    # The keyword attributes this resolution was built from.
+    def to_attributes
+      { use_case: use_case, kind: kind, prompt: prompt, available_prompts: available_prompts,
+        deployment_id: deployment_id, deployment_revision: deployment_revision,
+        prompt_version_id: prompt_version_id, prompt_version_number: prompt_version_number,
+        engine: engine, model: model, model_id: model_id, provider: provider, params: params,
+        provider_options: provider_options, messages: messages, text: text,
+        input_schema: input_schema, source: source, etag: etag, payload_policy: payload_policy,
+        warnings: warnings }
     end
 
     def to_h

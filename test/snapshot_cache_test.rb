@@ -182,6 +182,46 @@ class SnapshotCacheTest < Minitest::Test
     assert_includes error.message, "nothing is cached"
   end
 
+  def test_the_first_fetch_is_due_immediately_on_a_freshly_booted_host
+    # CLOCK_MONOTONIC counts from boot, so on a host that has been up for less than cache_ttl
+    # seconds a "never attempted" marker of 0.0 sits in the future: the first fetch would be held
+    # back and a healthy server reported as unreachable for the whole TTL.
+    config = PromptOn::Config.new(**client_options(logger: @logger, host: @server_url,
+                                                   cache_ttl: 600.0))
+    store = PromptOn::SnapshotStore.new(config)
+    poller = PromptOn::SnapshotPoller.new(config, store, PromptOn::Http.new(config),
+                                          clock: -> { 5.0 })
+
+    assert poller.ensure_document, "the first fetch is due now, not cache_ttl seconds from now"
+    assert_equal 1, @server.request_count
+    assert_equal "openai/gpt-4o-mini", PromptOn::Resolver.resolve(store.data, "greeting").model
+  end
+
+  def test_a_fetch_that_has_just_happened_is_not_due_again_within_the_ttl
+    config = PromptOn::Config.new(**client_options(logger: @logger, host: @server_url,
+                                                   cache_ttl: 600.0))
+    store = PromptOn::SnapshotStore.new(config)
+    poller = PromptOn::SnapshotPoller.new(config, store, PromptOn::Http.new(config),
+                                          clock: -> { 5.0 })
+    poller.ensure_document
+
+    store.clear
+    refute poller.ensure_document, "the TTL still applies once an attempt has been made"
+    assert_equal 1, @server.request_count
+  end
+
+  def test_close_waits_for_the_background_refresh_so_its_disk_write_lands
+    File.write(bundle_path, snapshot_json)
+    client = build_client(disk_cache: disk_path, bundle: bundle_path)
+    @state[:delay] = 0.2
+
+    assert_equal "bundle", client.resolve("greeting").source
+    client.close
+
+    assert_path_exists disk_path, "the in-flight refresh finishes before close returns"
+    assert_path_exists "#{disk_path}.meta.json"
+  end
+
   def test_the_disk_cache_survives_a_restart_with_prompton_down
     build_client(disk_cache: disk_path).resolve("greeting")
     @server.stop

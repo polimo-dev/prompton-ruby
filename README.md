@@ -27,7 +27,7 @@ Not published to RubyGems yet, so depend on the repository:
 gem "prompton-sdk", github: "polimo-dev/prompton-ruby"
 ```
 
-Once published, the line becomes `gem "prompton-sdk", "~> 0.1"`. Requires Ruby 3.1 or newer.
+Once published, the line becomes `gem "prompton-sdk", "~> 0.1"`. Requires Ruby 3.2 or newer.
 
 ## Quick start
 
@@ -152,6 +152,8 @@ environment it was not exported from.
 | Log batch gets `413` | splits it in half and resends | nothing |
 | Log batch gets any other `4xx` | drops it, counts it, logs once | nothing |
 | Log queue full | drops the oldest, counts them | nothing; one warning per minute |
+| Shutdown while a retry pause is running | waits the pause out when it fits in the timeout, otherwise drops what is left and counts it | `flush` reports `queued` and `paused_for`; one warning line naming the count |
+| Log record missing `use_case`, `model`, `status` or `started_at` | refuses to guess the field | `PromptOn::InvalidRecordError` with `field` |
 | No API key configured | no remote calls; disk and bundle only | one warning line at startup |
 
 A generation must never fail because PromptOn did. Config is stale in the worst case, not absent.
@@ -193,9 +195,10 @@ empty and `default` replaces it. There is no HTML escaping. A prompt version who
 comes back verbatim.
 
 For a smoke test or a genuinely low-traffic path, `PromptOn.remote_resolve("greeting")` asks the
-server instead (`POST /resolve`), caching the answer for the same TTL and rendering locally;
-`PromptOn.api_resolve("greeting", variables: {...})` returns the server's raw JSON. Neither belongs
-in a hot loop.
+server instead (`POST /resolve`) and caches the answer for the same TTL. Pass `variables:` and the
+rendering still happens locally, in the returned resolution: `remote_resolve("greeting", variables:
+{ name: "Ada" }).messages` are the rendered messages, not the template. `PromptOn.api_resolve` returns
+the server's raw JSON. Neither belongs in a hot loop.
 
 ## Monitoring logs
 
@@ -221,8 +224,15 @@ PromptOn.log({ "status" => "ok", "started_at" => started_at, "latency_ms" => 418
                "output" => { "content" => text } }, resolution: resolution)
 
 # 3. send what is queued and wait — shutdown, scripts, tests
-PromptOn.flush(timeout: 5)
+PromptOn.flush(timeout: 5)   # => {sent: 12, accepted: 12, duplicates: 0, rejected: 0}
 ```
+
+`flush` returns what it did: `sent`, `accepted`, `duplicates`, `rejected`, plus `queued` and
+`paused_for` whenever a `Retry-After` window it could not wait out left records behind — so an
+empty hash means "nothing was queued" and never "the queue was skipped". `close` (and the process
+exit hook) flushes once, waits out a retry pause short enough to fit in its timeout, and counts
+anything still unsent as `dropped_on_shutdown` with one warning line rather than losing it
+quietly.
 
 Return a `PromptOn::Failure` from the block to record a provider error without raising; anything
 it carries in `outcome:` (usage, partial output) is kept, which is what makes a parse failure
@@ -237,9 +247,15 @@ PromptOn::Failure.new(kind: "parse", message: e.message,
 
 ### The record
 
-`log` fills in `id` (a **UUIDv7** — the column is a UUIDv7 type and a v4 fails on write),
-`started_at`, `sdk`, and the resolution evidence when you pass a `Resolution`. A top-level key
-whose value is `nil` is omitted.
+`log` fills in `id` (a **UUIDv7** — the column is a UUIDv7 type and a v4 fails on write), `sdk`,
+and the resolution evidence when you pass a `Resolution`. A top-level key whose value is `nil` is
+omitted.
+
+The four fields the server requires — `use_case`, `model`, `status`, `started_at` — are yours:
+a missing one raises `PromptOn::InvalidRecordError` naming the field. `started_at` in particular is
+never guessed, because the records you build by hand are exactly the ones whose generation started
+earlier than the call to `log` (a stream that has just finished, a background scorer, a replay).
+`with_generation` measures it for you.
 
 | Field | Meaning |
 |---|---|

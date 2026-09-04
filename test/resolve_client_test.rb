@@ -45,9 +45,19 @@ class ResolveClientTest < Minitest::Test
     assert_nil @server.recorded.first.json["variables"], "the cached answer is the unrendered one"
     assert_equal [{ "role" => "system", "content" => "You greet." },
                   { "role" => "user", "content" => "Say hello to Ada." }],
-                 resolution.render(name: "Ada")
+                 resolution.messages, "the returned resolution carries the rendered prompt"
     assert_equal "openai/gpt-4o-mini", resolution.model
     assert_equal({ "temperature" => 0.2 }, resolution.params)
+  end
+
+  def test_without_variables_the_template_comes_back_as_it_is
+    client = build_client
+    resolution = client.remote_resolve("greeting")
+
+    assert_equal "Say hello to {{ name }}.", resolution.messages.last["content"]
+    assert_equal [{ "role" => "system", "content" => "You greet." },
+                  { "role" => "user", "content" => "Say hello to Ada." }],
+                 resolution.render(name: "Ada")
   end
 
   def test_a_429_or_5xx_serves_the_cached_answer

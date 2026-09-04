@@ -31,6 +31,10 @@ module PromptOn
       @http = http
       @mutex = Mutex.new
       @send_mutex = Mutex.new
+      # A leaf lock: the counters are touched from the sender thread while it holds no other
+      # lock, and from code that already holds @mutex, so they get a mutex of their own that is
+      # never taken while waiting for anything else.
+      @counters_mutex = Mutex.new
       @wake = ConditionVariable.new
       @queue = []
       @prebuilt = []
@@ -76,7 +80,12 @@ module PromptOn
     end
 
     # Sends everything queued now and waits for the result. This is what a script, a test or a
-    # shutdown hook calls. Returns a summary hash.
+    # shutdown hook calls.
+    #
+    # A retry pause (a 429 or 5xx Retry-After that has not elapsed) is respected rather than
+    # ignored, and reported rather than hidden: the summary carries +queued+ and +paused_for+
+    # whenever anything is left behind, so an empty hash means "nothing was queued" and never
+    # "the queue was silently skipped".
     def flush(timeout: 5.0)
       deadline = now + timeout
       summary = Hash.new(0)
@@ -89,10 +98,11 @@ module PromptOn
         break if now >= deadline
       end
 
-      summary
+      report_remaining(summary)
     end
 
-    # Stops the worker thread after one last best-effort flush.
+    # Stops the worker thread after one last best-effort flush. Anything a still-running retry
+    # pause leaves unsent is counted and named in one warning line rather than vanishing.
     def stop(timeout: 5.0)
       @mutex.synchronize do
         @stopped = true
@@ -100,19 +110,66 @@ module PromptOn
       end
       @thread&.join(timeout)
       @thread = nil
+      deadline = now + timeout
       flush(timeout: timeout)
+      drain_after_pause(deadline)
+      abandon_pending
       self
     end
 
     def stats
+      counters = @counters_mutex.synchronize { @counters.dup }
       @mutex.synchronize do
-        @counters.merge(queued: @queue.length, queued_bytes: @bytes,
-                        pending_batches: @prebuilt.length,
-                        paused_for: [@paused_until - now, 0.0].max.round(3))
+        counters.merge(queued: @queue.length, queued_bytes: @bytes,
+                       pending_batches: @prebuilt.length,
+                       paused_for: [@paused_until - now, 0.0].max.round(3))
       end
     end
 
     private
+
+    # A retry pause short enough to sit inside the shutdown budget is waited out instead of
+    # costing the records that are queued behind it.
+    def drain_after_pause(deadline)
+      loop do
+        pause, left = @mutex.synchronize { [@paused_until - now, pending] }
+        break if left.zero? || pause <= 0.0
+        break if now + pause > deadline
+
+        sleep(pause)
+        flush(timeout: [deadline - now, 0.0].max)
+      end
+    end
+
+    def report_remaining(summary)
+      @mutex.synchronize do
+        remaining = pending
+        summary[:queued] = remaining if remaining.positive?
+        paused = (@paused_until - now).round(3)
+        summary[:paused_for] = paused if paused.positive?
+      end
+      summary
+    end
+
+    # Called from #stop once the last flush has had its turn. Whatever a retry pause kept us from
+    # sending is dropped here — deliberately, and loudly.
+    def abandon_pending
+      abandoned = @mutex.synchronize do
+        left = pending
+        next 0 if left.zero?
+
+        @queue.clear
+        @prebuilt.clear
+        @bytes = 0
+        @oldest_at = nil
+        count(:dropped_on_shutdown, left)
+        left
+      end
+      return if abandoned.zero?
+
+      @config.logger.warn("[PromptOn] dropping #{abandoned} unsent monitoring log(s) at shutdown; " \
+                          "the retry window had not elapsed")
+    end
 
     def run
       loop do
@@ -204,8 +261,9 @@ module PromptOn
       return if @last_drop_warning && now - @last_drop_warning < DROP_WARN_INTERVAL
 
       @last_drop_warning = now
+      so_far = @counters_mutex.synchronize { @counters[:dropped_buffer_full] }
       @config.logger.warn("[PromptOn] monitoring log buffer is full; dropped the oldest records " \
-                          "(#{@counters[:dropped_buffer_full]} so far)")
+                          "(#{so_far} so far)")
     end
 
     def deliver(batch)
@@ -289,7 +347,7 @@ module PromptOn
     end
 
     def count(key, amount = 1)
-      @counters[key] += amount
+      @counters_mutex.synchronize { @counters[key] += amount }
     end
 
     def now

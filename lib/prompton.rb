@@ -47,6 +47,10 @@ module PromptOn
     logged clear_logs put_snapshot stub config
   ].freeze
 
+  # Guards the default client so two threads racing on the first call cannot each build one,
+  # each with its own background threads.
+  LOCK = Mutex.new
+
   class << self
     # Replaces the default client with one built from these options. Returns the new client.
     def configure(**options)
@@ -55,21 +59,29 @@ module PromptOn
 
     # The default client, built from the environment on first use.
     def client
-      @client ||= Client.new
+      LOCK.synchronize { @client ||= Client.new }
     end
 
     # Replaces the default client, closing the one it replaces.
     def client=(value)
-      previous = @client
-      @client = value
+      previous = LOCK.synchronize do
+        was = @client
+        @client = value
+        was
+      end
       previous.close if previous && !previous.equal?(value)
       value
     end
 
     # Closes the default client and forgets it. The next call builds a fresh one.
     def reset!
-      @client&.close
-      @client = nil
+      previous = LOCK.synchronize do
+        was = @client
+        @client = nil
+        was
+      end
+      previous&.close
+      nil
     end
 
     DELEGATED.each do |name|

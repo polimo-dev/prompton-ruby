@@ -33,6 +33,40 @@ module PromptOn
   class Client
     REQUIRED_RECORD_FIELDS = %w[use_case model status started_at].freeze
 
+    # Ruby cannot unregister an at_exit block, so there is exactly one for the whole process and
+    # it drains a registry of clients held weakly: a client that goes out of scope is collected
+    # with its queued records instead of living until exit. #close takes a client out of the
+    # drain without needing the registry to support deletion (WeakMap#delete is Ruby 3.3+).
+    @exit_registry = ObjectSpace::WeakMap.new
+    @exit_registry_mutex = Mutex.new
+    @exit_hook_installed = false
+
+    class << self
+      def register_for_exit(client)
+        @exit_registry_mutex.synchronize do
+          @exit_registry[client] = client
+          next if @exit_hook_installed
+
+          @exit_hook_installed = true
+          at_exit { PromptOn::Client.drain_at_exit }
+        end
+        client
+      end
+
+      # The clients that would be drained if the process exited now.
+      def open_at_exit
+        @exit_registry_mutex.synchronize { @exit_registry.keys }.reject(&:closed?)
+      end
+
+      def drain_at_exit(timeout: 2.0)
+        open_at_exit.each do |client|
+          client.close(timeout: timeout)
+        rescue StandardError
+          nil
+        end
+      end
+    end
+
     attr_reader :config
 
     def initialize(config = nil, **options)
@@ -46,6 +80,7 @@ module PromptOn
       @capture_mutex = Mutex.new
       @stub_document = nil
       @discarded_logs = 0
+      @closed = false
 
       announce_disk_only_mode
       unless @config.test?
@@ -80,6 +115,9 @@ module PromptOn
     end
 
     # Resolves through POST /resolve instead of the snapshot. The simple path and the smoke test.
+    #
+    # Passing +variables+ renders them locally into the returned resolution: #messages (chat) or
+    # #text (text) come back rendered, not as the template.
     def remote_resolve(use_case, prompt: nil, environment: nil, variables: nil)
       @resolve_client.resolve(use_case, prompt: prompt, environment: environment, variables: variables)
     end
@@ -133,9 +171,12 @@ module PromptOn
     #   client.log(use_case: "greeting", model: "openai/gpt-4o-mini", status: "ok",
     #              started_at: started_at, latency_ms: 842)
     #
-    # Fills in id (UUIDv7), started_at and sdk, and — when a Resolution is passed — the
-    # deployment, prompt and resolution_source evidence. Raises PromptOn::InvalidRecordError when
-    # a field the server requires is missing.
+    # Fills in id (UUIDv7) and sdk, and — when a Resolution is passed — the deployment, prompt
+    # and resolution_source evidence. The four fields the server requires (use_case, model,
+    # status, started_at) are yours to supply: a missing one raises PromptOn::InvalidRecordError
+    # rather than being guessed, because a record built after the fact — a stream that has just
+    # finished, a background scorer, a replay — must carry the time the generation really
+    # started. #with_generation measures started_at for you.
     def log(record = nil, resolution: nil, environment: nil, **fields)
       prepared = prepare_record(Params.deep_stringify(record || {}).merge(Params.deep_stringify(fields)),
                                 resolution)
@@ -169,14 +210,14 @@ module PromptOn
     # Sends everything queued now and waits for the result.
     def flush(timeout: 5.0)
       return { captured: logged.length } if @config.test?
-      return { discarded: @discarded_logs } unless @config.remote?
+      return { discarded: discarded_logs } unless @config.remote?
 
       @buffer.flush(timeout: timeout)
     end
 
     def log_stats
       return { captured: logged.length } if @config.test?
-      return { discarded: @discarded_logs } unless @config.remote?
+      return { discarded: discarded_logs } unless @config.remote?
 
       @buffer.stats
     end
@@ -242,11 +283,17 @@ module PromptOn
 
     # --- lifecycle -----------------------------------------------------------
 
-    # Stops the background threads after a last best-effort flush.
+    # Stops the background threads after a last best-effort flush, and takes this client out of
+    # the process-wide exit drain.
     def close(timeout: 5.0)
+      @capture_mutex.synchronize { @closed = true }
       @poller.stop
       @buffer.stop(timeout: timeout) unless @config.test?
       self
+    end
+
+    def closed?
+      @capture_mutex.synchronize { @closed }
     end
 
     private
@@ -266,9 +313,13 @@ module PromptOn
       value.lstrip.start_with?("{") ? JSON.parse(value) : JSON.parse(File.read(value))
     end
 
+    def discarded_logs
+      @capture_mutex.synchronize { @discarded_logs }
+    end
+
     def discard_log
-      @discarded_logs += 1
-      return unless @discarded_logs == 1
+      discarded = @capture_mutex.synchronize { @discarded_logs += 1 }
+      return unless discarded == 1
 
       @config.logger.warn("[PromptOn] monitoring logs are not being sent: " \
                           "#{@config.mode == :offline ? "offline mode" : "no API key configured"}")
@@ -300,7 +351,6 @@ module PromptOn
     def prepare_record(record, resolution)
       prepared = Params.deep_stringify(record)
       prepared["id"] ||= UuidV7.generate
-      prepared["started_at"] ||= Time.now.utc.iso8601(6)
       prepared["sdk"] ||= { "name" => SDK_NAME, "version" => VERSION }
       merge_resolution(prepared, resolution) if resolution
 
@@ -349,11 +399,7 @@ module PromptOn
     def install_exit_hook
       return unless @config.flush_on_exit && !@config.test?
 
-      at_exit do
-        close(timeout: 2.0)
-      rescue StandardError
-        nil
-      end
+      Client.register_for_exit(self)
     end
   end
 end

@@ -23,14 +23,17 @@ module PromptOn
       @cache = {}
     end
 
-    # A Resolution built from the server's answer, with this call's variables rendered locally.
+    # A Resolution built from the server's answer.
+    #
+    # Passing +variables+ renders them locally into the returned resolution, so #messages (chat)
+    # or #text (text) carry the rendered prompt rather than the template. Without them the
+    # template comes back as it is and you call #render yourself.
     def resolve(use_case, prompt: nil, environment: nil, variables: nil)
       body = fetch(use_case, prompt: prompt, environment: environment)
       resolution = to_resolution(body)
       return resolution if variables.nil?
 
-      resolution.render(variables)
-      resolution
+      resolution.with_rendered(resolution.render(variables))
     end
 
     # The raw POST /resolve response body.

@@ -1,5 +1,5 @@
 AllCops:
-  TargetRubyVersion: 3.1
+  TargetRubyVersion: 3.2
   NewCops: enable
   SuggestExtensions: false
   Exclude:
@@ -27,3 +27,8 @@ Naming/VariableNumber:
 
 Style/OpenStructUse:
   Enabled: false
+
+# A named splat (**options) documents a public API better than an anonymous **, which is all
+# TargetRubyVersion 3.2 makes newly available here.
+Style/ArgumentsForwarding:
+  UseAnonymousForwarding: false

@@ -89,11 +89,50 @@ class LogBufferTest < Minitest::Test
     buffer.enqueue(record(1))
 
     buffer.flush
-    buffer.flush
+    second = buffer.flush
 
     assert_equal 1, @server.request_count
     assert_equal 1, buffer.stats[:queued], "the batch stays queued, later records queue behind it"
     assert_operator buffer.stats[:paused_for], :>, 25
+    assert_equal 1, second[:queued], "a flush that sends nothing says what it left behind"
+    assert_operator second[:paused_for], :>, 25
+  end
+
+  def test_a_flush_with_an_empty_queue_is_still_an_empty_summary
+    assert_empty build_buffer.flush
+  end
+
+  def test_a_pause_shorter_than_the_shutdown_budget_is_waited_out
+    attempts = 0
+    @behaviour = lambda do |_request|
+      attempts += 1
+      attempts == 1 ? [429, { "Retry-After" => "1" }, { "error" => {} }] : ok
+    end
+    buffer = build_buffer
+    buffer.enqueue(record(1))
+
+    buffer.flush
+    assert_equal 1, buffer.stats[:queued]
+
+    buffer.stop(timeout: 3.0)
+
+    assert_equal 2, @server.request_count
+    assert_equal 0, buffer.stats[:queued]
+    assert_equal 0, buffer.stats[:dropped_on_shutdown]
+  end
+
+  def test_a_pause_longer_than_the_shutdown_budget_drops_loudly_rather_than_silently
+    @behaviour = ->(_request) { [429, { "Retry-After" => "60" }, { "error" => {} }] }
+    buffer = build_buffer
+    2.times { |index| buffer.enqueue(record(index)) }
+
+    buffer.flush
+    buffer.stop(timeout: 0.2)
+
+    assert_equal 1, @server.request_count
+    assert_equal 2, buffer.stats[:dropped_on_shutdown]
+    assert_equal 0, buffer.stats[:queued]
+    assert(@logger.lines.any? { |line| line.include?("dropping 2 unsent monitoring log") })
   end
 
   def test_a_5xx_retries_and_then_drops_the_batch_once_the_attempts_run_out

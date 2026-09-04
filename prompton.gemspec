@@ -16,7 +16,7 @@ Gem::Specification.new do |spec|
   TEXT
   spec.homepage = "https://github.com/polimo-dev/prompton-ruby"
   spec.license = "Apache-2.0"
-  spec.required_ruby_version = ">= 3.1"
+  spec.required_ruby_version = ">= 3.2"
 
   spec.files = Dir["lib/**/*.rb"] + %w[README.md CHANGELOG.md LICENSE]
   spec.require_paths = ["lib"]

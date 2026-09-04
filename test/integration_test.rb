@@ -68,6 +68,24 @@ class IntegrationTest < Minitest::Test
     assert_agrees_with_server("embed")
   end
 
+  def test_remote_resolve_renders_locally_and_agrees_with_the_server
+    chat = @client.remote_resolve("greeting", variables: { "name" => "Ada" })
+    server = @http.post_resolve({ "use_case" => "greeting", "environment" => "production",
+                                  "variables" => { "name" => "Ada" } })
+
+    assert_equal 200, server.status, server.body.inspect
+    assert_equal server.body["messages"].map { |message| message.slice("role", "content") },
+                 chat.messages.map { |message| message.slice("role", "content") },
+                 "the resolution comes back rendered, not as the template"
+
+    text = @client.remote_resolve("summarize", variables: { "items" => %w[alpha beta] })
+    server_text = @http.post_resolve({ "use_case" => "summarize", "environment" => "production",
+                                       "variables" => { "items" => %w[alpha beta] } })
+
+    assert_equal 200, server_text.status, server_text.body.inspect
+    assert_equal server_text.body["text"], text.text
+  end
+
   def test_the_error_cases_match_the_server
     assert_raises(PromptOn::UnknownUseCaseError) { @client.resolve("does_not_exist") }
     assert_equal 404, @http.post_resolve({ "use_case" => "does_not_exist" }).status

@@ -1,0 +1,29 @@
+AllCops:
+  TargetRubyVersion: 3.1
+  NewCops: enable
+  SuggestExtensions: false
+  Exclude:
+    - "vendor/**/*"
+    - "test/conformance/**/*"
+
+Layout/LineLength:
+  Max: 120
+
+Metrics:
+  Enabled: false
+
+Style/StringLiterals:
+  EnforcedStyle: double_quotes
+
+Style/StringLiteralsInInterpolation:
+  EnforcedStyle: double_quotes
+
+Naming/PredicateMethod:
+  Enabled: false
+
+# HTTP status codes read better as test_a_429_… than as test_a429_….
+Naming/VariableNumber:
+  Enabled: false
+
+Style/OpenStructUse:
+  Enabled: false

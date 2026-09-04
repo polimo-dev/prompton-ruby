@@ -1,0 +1,9 @@
+*.gem
+.bundle/
+.rubocop_cache/
+Gemfile.lock
+coverage/
+doc/
+pkg/
+tmp/
+vendor/bundle/

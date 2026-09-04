@@ -210,7 +210,7 @@ module PromptOn
                                                        raise_on_error: raise_on_error,
                                                        error: ApiError.new(response.status, response.body))
       end
-    rescue InvalidSnapshotError => e
+    rescue InvalidUseCaseDocumentError => e
       failed(e.message, raise_on_error: raise_on_error, error: e)
     end
 

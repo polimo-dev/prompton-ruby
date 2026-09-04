@@ -75,8 +75,8 @@ class ConformanceTest < Minitest::Test
 
   def test_every_conformance_document_decodes_as_schema_v4
     conformance("use_case.json")["documents"].each do |reference, raw|
-      data = PromptOn::SnapshotData.from_hash(raw)
-      assert_equal PromptOn::SnapshotData::SCHEMA_VERSION, data.schema_version, reference
+      data = PromptOn::UseCaseDocument.from_hash(raw)
+      assert_equal PromptOn::UseCaseDocument::SCHEMA_VERSION, data.schema_version, reference
     end
   end
 
@@ -84,7 +84,7 @@ class ConformanceTest < Minitest::Test
     document = conformance("use_case.json")
     assert_equal document["default_prompt"], PromptOn::Resolver::DEFAULT_PROMPT
 
-    snapshots = document["documents"].transform_values { |raw| PromptOn::SnapshotData.from_hash(raw) }
+    snapshots = document["documents"].transform_values { |raw| PromptOn::UseCaseDocument.from_hash(raw) }
 
     document["cases"].each do |kase|
       data = snapshots.fetch(kase["document_ref"])

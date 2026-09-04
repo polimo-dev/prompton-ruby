@@ -5,7 +5,7 @@ require "time"
 require "json"
 require "securerandom"
 require_relative "errors"
-require_relative "snapshot_data"
+require_relative "use_case_document"
 
 module PromptOn
   # The three tiers a snapshot can come from: memory, one local file, and a file bundled into the
@@ -61,7 +61,7 @@ module PromptOn
 
     # Installs a document fetched from the server and mirrors it to the disk cache.
     def install_remote(body, etag: nil, last_modified: nil, persist: true)
-      data = SnapshotData.parse(body)
+      data = UseCaseDocument.parse(body)
       guard!(data)
       entry = Entry.new(data: data, etag: etag, last_modified: last_modified, source: "remote",
                         fetched_at: Time.now, stale_since: nil, body: body)
@@ -73,7 +73,7 @@ module PromptOn
     # Installs a document the caller already holds — test mode, or a manual override.
     def install_document(document, source: "manual", etag: "manual")
       body = document.is_a?(String) ? document : JSON.generate(document)
-      data = SnapshotData.parse(body)
+      data = UseCaseDocument.parse(body)
       entry = Entry.new(data: data, etag: etag, last_modified: nil, source: source,
                         fetched_at: Time.now, stale_since: nil, body: body)
       @mutex.synchronize { @entry = entry }
@@ -132,26 +132,26 @@ module PromptOn
 
     def guard!(data)
       if data.environment && data.environment != @config.environment
-        raise InvalidSnapshotError,
+        raise InvalidUseCaseDocumentError,
               "snapshot is for environment #{data.environment.inspect}, " \
               "this process reads #{@config.environment.inspect}"
       end
       return unless @config.project && data.project && data.project != @config.project
 
-      raise InvalidSnapshotError,
+      raise InvalidUseCaseDocumentError,
             "snapshot is for project #{data.project.inspect}, this process reads #{@config.project.inspect}"
     end
 
     def read_file(path, source)
       body = File.read(path)
-      data = SnapshotData.parse(body)
+      data = UseCaseDocument.parse(body)
       guard!(data)
       meta = read_meta(path)
       Entry.new(data: data, etag: meta["etag"], last_modified: meta["last_modified"], source: source,
                 fetched_at: parse_time(meta["fetched_at"]) || Time.now, stale_since: nil, body: body)
     rescue Errno::ENOENT
       nil
-    rescue InvalidSnapshotError => e
+    rescue InvalidUseCaseDocumentError => e
       @config.logger.warn("[PromptOn] ignoring #{source} snapshot #{path}: #{e.message}")
       nil
     rescue SystemCallError, IOError => e

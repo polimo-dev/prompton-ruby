@@ -4,7 +4,7 @@ require_relative "test_helper"
 
 class LogBuilderTest < Minitest::Test
   def setup
-    @evidence = PromptOn::Resolver.resolve(PromptOn::SnapshotData.from_hash(snapshot_document),
+    @evidence = PromptOn::Resolver.resolve(PromptOn::UseCaseDocument.from_hash(snapshot_document),
                                            "greeting", source: "remote")
   end
 

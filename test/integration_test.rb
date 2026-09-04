@@ -6,9 +6,9 @@ require_relative "test_helper"
 #
 #   PTN_HOST=http://localhost:4000 PTN_API_KEY=ptn_yourproject_… bundle exec rake test
 #
-# It asserts the two things a unit test cannot: that the snapshot this SDK fetches and resolves
-# locally agrees with the server's own POST /use-cases/{key}/prompt, and that the monitoring logs it builds are
-# accepted by the ingest endpoint.
+# It asserts the two things a unit test cannot: that the use-case document this SDK fetches and reads
+# locally agrees with the server's own POST /use-cases/{key}/prompt, and that the monitoring logs it
+# builds are accepted by the ingest endpoint.
 class IntegrationTest < Minitest::Test
   def setup
     skip("set PTN_API_KEY to run the live integration test") if ENV["PTN_API_KEY"].to_s.empty?
@@ -169,6 +169,8 @@ class IntegrationTest < Minitest::Test
 
   def assert_agrees_with_server(use_case, prompt: nil, variables: nil)
     local = @client.use_case(use_case, prompt: prompt)
+    assert_instance_of PromptOn::UseCaseDocument, @client.use_case_document
+
     payload = { "use_case" => use_case, "environment" => "production" }
     payload["prompt"] = prompt if prompt
     payload["variables"] = variables if variables

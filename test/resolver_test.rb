@@ -4,7 +4,7 @@ require_relative "test_helper"
 
 class ResolverTest < Minitest::Test
   def setup
-    @snapshot = PromptOn::SnapshotData.from_hash(snapshot_document)
+    @snapshot = PromptOn::UseCaseDocument.from_hash(snapshot_document)
   end
 
   def test_params_merge_shallowly_with_the_deployment_winning
@@ -69,7 +69,7 @@ class ResolverTest < Minitest::Test
     document = snapshot_document
     document["prompt_versions"] = {}
     document["models"] = {}
-    resolution = PromptOn::Resolver.resolve(PromptOn::SnapshotData.from_hash(document), "greeting")
+    resolution = PromptOn::Resolver.resolve(PromptOn::UseCaseDocument.from_hash(document), "greeting")
 
     assert_nil resolution.model
     assert_nil resolution.prompt_version_id
@@ -81,17 +81,17 @@ class ResolverTest < Minitest::Test
   def test_schema_version_must_be_exactly_four
     [3, 5].each do |version|
       error = assert_raises(PromptOn::UnsupportedSchemaVersionError) do
-        PromptOn::SnapshotData.from_hash(snapshot_document.merge("schema_version" => version))
+        PromptOn::UseCaseDocument.from_hash(snapshot_document.merge("schema_version" => version))
       end
       assert_equal version, error.schema_version
     end
 
     missing = snapshot_document.except("schema_version")
-    assert_raises(PromptOn::InvalidSnapshotError) { PromptOn::SnapshotData.from_hash(missing) }
+    assert_raises(PromptOn::InvalidUseCaseDocumentError) { PromptOn::UseCaseDocument.from_hash(missing) }
     legacy = snapshot_document.except("schema_version").merge("version" => 4)
-    assert_raises(PromptOn::InvalidSnapshotError) { PromptOn::SnapshotData.from_hash(legacy) }
+    assert_raises(PromptOn::InvalidUseCaseDocumentError) { PromptOn::UseCaseDocument.from_hash(legacy) }
 
-    data = PromptOn::SnapshotData.from_hash(snapshot_document.merge("schema_version" => 4))
+    data = PromptOn::UseCaseDocument.from_hash(snapshot_document.merge("schema_version" => 4))
     assert_equal 4, data.schema_version
     assert_equal "openai/gpt-4o-mini", PromptOn::Resolver.resolve(data, "greeting").model
   end

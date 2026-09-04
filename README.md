@@ -319,7 +319,7 @@ All of them are `PromptOn::Error`, each with a `code`:
 
 `NotReadyError`, `UnknownUseCaseError`, `UnresolvedError`, `UnknownPromptError` (carries `prompt`
 and `prompt_names`), `MissingVariableError` (carries `variable`), `TemplateSyntaxError`,
-`TemplateRenderError`, `InvalidSnapshotError`, `UnsupportedSchemaVersionError`, `ApiError`
+`TemplateRenderError`, `InvalidUseCaseDocumentError`, `UnsupportedSchemaVersionError`, `ApiError`
 (carries `status`, `code` and `details`), `TransportError`, `InvalidRecordError`,
 `ConfigurationError`.
 

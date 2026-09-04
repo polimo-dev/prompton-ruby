@@ -10,7 +10,7 @@ require_relative "http"
 require_relative "log_buffer"
 require_relative "params"
 require_relative "payload"
-require_relative "resolve_client"
+require_relative "use_case_prompt_client"
 require_relative "resolver"
 require_relative "snapshot_poller"
 require_relative "snapshot_store"
@@ -75,7 +75,7 @@ module PromptOn
       @http = Http.new(@config)
       @store = SnapshotStore.new(@config)
       @poller = SnapshotPoller.new(@config, @store, @http)
-      @resolve_client = ResolveClient.new(@config, @http)
+      @use_case_prompt_client = UseCasePromptClient.new(@config, @http)
       @buffer = LogBuffer.new(@config, @http)
       @captured = []
       @capture_mutex = Mutex.new
@@ -115,13 +115,15 @@ module PromptOn
     # Passing +variables+ renders them locally into the returned use case: #messages (chat) or
     # #text (text) come back rendered, not as the template.
     def remote_use_case(use_case, prompt: nil, environment: nil, variables: nil)
-      evidence = @resolve_client.resolve(use_case, prompt: prompt, environment: environment, variables: variables)
+      evidence =
+        @use_case_prompt_client.resolve(use_case, prompt: prompt, environment: environment,
+                                                  variables: variables)
       UseCase.new(self, evidence)
     end
 
     # The raw prompt endpoint response. Passing +variables+ asks the server to render.
     def api_use_case(use_case, prompt: nil, environment: nil, variables: nil)
-      @resolve_client.fetch(use_case, prompt: prompt, environment: environment, variables: variables)
+      @use_case_prompt_client.fetch(use_case, prompt: prompt, environment: environment, variables: variables)
     end
 
     # --- use-case document ---------------------------------------------------
@@ -323,7 +325,7 @@ module PromptOn
     end
 
     def base_stub_document
-      { "schema_version" => SnapshotData::SCHEMA_VERSION, "project" => @config.project,
+      { "schema_version" => UseCaseDocument::SCHEMA_VERSION, "project" => @config.project,
         "environment" => @config.environment, "use_cases" => {}, "deployments" => {},
         "prompt_versions" => {}, "models" => {} }
     end

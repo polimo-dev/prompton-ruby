@@ -4,7 +4,7 @@ require_relative "test_helper"
 
 # POST /use-cases/:key/prompt is the simple path and the smoke test. It follows the same rules as
 # the document store: cache the answer, and serve the cached one when PromptOn says 429 or 5xx.
-class ResolveClientTest < Minitest::Test
+class UseCasePromptClientTest < Minitest::Test
   def setup
     @logger = MemoryLogger.new
     @status = 200

@@ -13,7 +13,7 @@ module PromptOn
   #
   # For anything but a smoke test or a low-traffic path, prefer the local use-case document:
   # the prompt endpoint is not a hot-loop endpoint.
-  class ResolveClient
+  class UseCasePromptClient
     CacheEntry = Struct.new(:body, :expires_at, keyword_init: true)
 
     def initialize(config, http)

@@ -7,7 +7,7 @@ require_relative "test_helper"
 #   PTN_HOST=http://localhost:4000 PTN_API_KEY=ptn_yourproject_… bundle exec rake test
 #
 # It asserts the two things a unit test cannot: that the snapshot this SDK fetches and resolves
-# locally agrees with the server's own POST /resolve, and that the monitoring logs it builds are
+# locally agrees with the server's own POST /use-cases/{key}/prompt, and that the monitoring logs it builds are
 # accepted by the ingest endpoint.
 class IntegrationTest < Minitest::Test
   def setup
@@ -52,76 +52,76 @@ class IntegrationTest < Minitest::Test
     assert_equal "nope", response.body.dig("error", "details", "environment")
   end
 
-  def test_local_resolution_agrees_with_the_server_for_the_default_prompt
+  def test_local_use_case_agrees_with_the_server_for_the_default_prompt
     assert_agrees_with_server("greeting", variables: { "name" => "Ada" })
   end
 
-  def test_local_resolution_agrees_with_the_server_for_a_named_prompt
+  def test_local_use_case_agrees_with_the_server_for_a_named_prompt
     assert_agrees_with_server("greeting", prompt: "ko", variables: { "name" => "아다" })
   end
 
-  def test_local_resolution_agrees_with_the_server_for_a_text_use_case
+  def test_local_use_case_agrees_with_the_server_for_a_text_use_case
     assert_agrees_with_server("summarize", variables: { "items" => %w[alpha beta gamma] })
   end
 
-  def test_local_resolution_agrees_with_the_server_for_an_embedding_use_case
+  def test_local_use_case_agrees_with_the_server_for_an_embedding_use_case
     assert_agrees_with_server("embed")
   end
 
-  def test_remote_resolve_renders_locally_and_agrees_with_the_server
-    chat = @client.remote_resolve("greeting", variables: { "name" => "Ada" })
-    server = @http.post_resolve({ "use_case" => "greeting", "environment" => "production",
-                                  "variables" => { "name" => "Ada" } })
+  def test_remote_use_case_renders_locally_and_agrees_with_the_server
+    chat = @client.remote_use_case("greeting", variables: { "name" => "Ada" })
+    server = @http.post_resolve("greeting", { "environment" => "production",
+                                              "variables" => { "name" => "Ada" } })
 
     assert_equal 200, server.status, server.body.inspect
     assert_equal server.body["messages"].map { |message| message.slice("role", "content") },
                  chat.messages.map { |message| message.slice("role", "content") },
                  "the resolution comes back rendered, not as the template"
 
-    text = @client.remote_resolve("summarize", variables: { "items" => %w[alpha beta] })
-    server_text = @http.post_resolve({ "use_case" => "summarize", "environment" => "production",
-                                       "variables" => { "items" => %w[alpha beta] } })
+    text = @client.remote_use_case("summarize", variables: { "items" => %w[alpha beta] })
+    server_text = @http.post_resolve("summarize", { "environment" => "production",
+                                                    "variables" => { "items" => %w[alpha beta] } })
 
     assert_equal 200, server_text.status, server_text.body.inspect
     assert_equal server_text.body["text"], text.text
   end
 
   def test_the_error_cases_match_the_server
-    assert_raises(PromptOn::UnknownUseCaseError) { @client.resolve("does_not_exist") }
-    assert_equal 404, @http.post_resolve({ "use_case" => "does_not_exist" }).status
+    assert_raises(PromptOn::UnknownUseCaseError) { @client.use_case("does_not_exist") }
+    assert_equal 404, @http.post_resolve("does_not_exist", {}).status
 
-    error = assert_raises(PromptOn::UnknownPromptError) { @client.resolve("greeting", prompt: "fr") }
-    remote = @http.post_resolve({ "use_case" => "greeting", "prompt" => "fr" })
+    error = assert_raises(PromptOn::UnknownPromptError) { @client.use_case("greeting", prompt: "fr") }
+    remote = @http.post_resolve("greeting", { "prompt" => "fr" })
     assert_equal 404, remote.status
     assert_equal "unknown_prompt", remote.body.dig("error", "details", "reason")
-    assert_equal remote.body.dig("error", "details", "available_prompts"), error.available_prompts
+    assert_equal remote.body.dig("error", "details", "prompt_names"), error.prompt_names
 
-    missing = assert_raises(PromptOn::MissingVariableError) { @client.resolve("greeting").render({}) }
-    remote = @http.post_resolve({ "use_case" => "greeting", "variables" => {} })
+    missing = assert_raises(PromptOn::MissingVariableError) { @client.use_case("greeting").messages({}) }
+    remote = @http.post_resolve("greeting", { "variables" => {} })
     assert_equal 400, remote.status
     assert_equal remote.body.dig("error", "details", "missing_variable"), missing.variable
   end
 
-  def test_a_generations_batch_is_accepted_and_a_resend_counts_as_duplicates
-    records = [generation_record, generation_record]
+  def test_a_logs_batch_is_accepted_and_a_resend_counts_as_duplicates
+    records = [log_record, log_record]
 
-    first = @http.post_generations(records, environment: "production")
+    first = @http.post_logs(records, environment: "production")
     assert_equal 202, first.status
     assert_equal 2, first.body["accepted"]
     assert_equal 0, first.body["duplicates"]
     assert_empty first.body["rejected"]
 
-    resend = @http.post_generations(records, environment: "production")
+    resend = @http.post_logs(records, environment: "production")
     assert_equal 202, resend.status
     assert_equal 0, resend.body["accepted"]
     assert_equal 2, resend.body["duplicates"], "the id is the idempotency key"
   end
 
   def test_a_record_the_server_refuses_comes_back_in_rejected_without_failing_the_batch
-    good = generation_record
-    bad = generation_record.merge("id" => "not-a-uuid")
+    good = log_record
+    bad = log_record.merge("id" => "not-a-uuid")
 
-    response = @http.post_generations([bad, good], environment: "production")
+    response = @http.post_logs([bad, good], environment: "production")
 
     assert_equal 202, response.status
     assert_equal 1, response.body["accepted"]
@@ -129,12 +129,12 @@ class IntegrationTest < Minitest::Test
     assert_equal 0, response.body["rejected"].first["index"]
   end
 
-  def test_the_client_sends_what_with_generation_builds
-    resolution = @client.resolve("greeting")
-    messages = resolution.render(name: "Ada")
+  def test_the_client_sends_what_track_builds
+    use_case = @client.use_case("greeting")
+    messages = use_case.messages(name: "Ada")
 
-    @client.with_generation(resolution, variables: { name: "Ada" }, input_messages: messages,
-                                        trace_id: "integration:#{Process.pid}", end_user_ref: "user-42") do
+    use_case.track(variables: { name: "Ada" }, input_messages: messages,
+                   trace_id: "integration:#{Process.pid}", end_user_ref: "user-42") do
       { content: "Hello, Ada!", finish_reason: "stop", cost_source: "provider", cost_usd: 0.000012,
         usage: { input_tokens: 38, output_tokens: 6 } }
     end
@@ -155,36 +155,36 @@ class IntegrationTest < Minitest::Test
   end
 
   def test_the_disk_cache_is_written_and_answers_when_the_host_is_unreachable
-    @client.resolve("greeting")
+    @client.use_case("greeting")
 
     offline = PromptOn::Client.new(api_key: ENV.fetch("PTN_API_KEY"), logger: @logger, poll: false,
                                    flush_on_exit: false, host: PromptOnTest::StubServer.dead_url,
                                    disk_cache: File.join(@dir, "snapshot.json"))
 
-    assert_equal "disk", offline.resolve("greeting").source
+    assert_equal "disk", offline.use_case("greeting").source
     offline.close
   end
 
   private
 
   def assert_agrees_with_server(use_case, prompt: nil, variables: nil)
-    local = @client.resolve(use_case, prompt: prompt)
+    local = @client.use_case(use_case, prompt: prompt)
     payload = { "use_case" => use_case, "environment" => "production" }
     payload["prompt"] = prompt if prompt
     payload["variables"] = variables if variables
-    remote = @http.post_resolve(payload)
+    remote = @http.post_resolve(use_case, payload.except("use_case"))
 
     assert_equal 200, remote.status, remote.body.inspect
     agree(remote.body["kind"], local.kind, "kind")
     agree(remote.body.dig("deployment", "id"), local.deployment_id, "deployment id")
     agree(remote.body.dig("deployment", "revision"), local.deployment_revision, "revision")
     agree(remote.body["prompt"], local.prompt, "prompt")
-    agree(remote.body["prompts"], local.available_prompts, "prompts")
+    agree(remote.body["prompt_names"], local.prompt_names, "prompt_names")
     agree(remote.body["model"], local.model, "model")
     agree(remote.body["model_id"], local.model_id, "model_id")
     agree(remote.body["provider"], local.provider, "provider")
-    agree(remote.body["effective_params"], local.params, "effective_params")
-    agree(remote.body["effective_provider_options"], local.provider_options, "provider options")
+    agree(remote.body["params"], local.params, "params")
+    agree(remote.body["provider_options"], local.provider_options, "provider options")
     agree(remote.body["prompt_version"]&.slice("id", "number"),
           local.prompt_version_id && { "id" => local.prompt_version_id,
                                        "number" => local.prompt_version_number },
@@ -194,10 +194,10 @@ class IntegrationTest < Minitest::Test
 
     case local.kind
     when "chat"
-      rendered = local.render(variables).map { |message| message.slice("role", "content") }
+      rendered = local.messages(variables).map { |message| message.slice("role", "content") }
       assert_equal remote.body["messages"].map { |m| m.slice("role", "content") }, rendered
     when "text"
-      assert_equal remote.body["text"], local.render(variables)
+      assert_equal remote.body["text"], local.text(variables)
     end
   end
 
@@ -209,11 +209,11 @@ class IntegrationTest < Minitest::Test
     end
   end
 
-  def generation_record
+  def log_record
     { "id" => PromptOn::UuidV7.generate, "use_case" => "greeting", "kind" => "chat",
       "model" => "openai/gpt-4o-mini", "provider" => "openrouter", "status" => "ok",
       "started_at" => Time.now.utc.iso8601(6), "finish_reason" => "stop", "stop_kind" => "stop",
-      "latency_ms" => 842, "resolution_source" => "remote",
+      "latency_ms" => 842, "source" => "remote",
       "input" => { "variables" => { "name" => "Ada" } }, "output" => { "content" => "Hello, Ada!" },
       "usage" => { "input_tokens" => 38, "output_tokens" => 6, "cost_source" => "provider" },
       "trace_id" => "integration:#{Process.pid}",

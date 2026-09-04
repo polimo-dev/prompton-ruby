@@ -5,7 +5,7 @@ require "json"
 require "time"
 require_relative "config"
 require_relative "errors"
-require_relative "generation"
+require_relative "log_builder"
 require_relative "http"
 require_relative "log_buffer"
 require_relative "params"
@@ -14,18 +14,19 @@ require_relative "resolve_client"
 require_relative "resolver"
 require_relative "snapshot_poller"
 require_relative "snapshot_store"
+require_relative "use_case"
 require_relative "uuid_v7"
 
 module PromptOn
-  # One configured PromptOn client: a snapshot store, a poller, a /resolve client and a
-  # monitoring-log buffer.
+  # One configured PromptOn client: a use-case document store, a poller, a prompt endpoint
+  # client and a monitoring-log buffer.
   #
   #   prompton = PromptOn::Client.new(api_key: ENV["PTN_API_KEY"])
-  #   resolution = prompton.resolve("greeting", prompt: "ko")
-  #   messages = resolution.render(name: "Ada")
+  #   use_case = prompton.use_case("greeting", prompt: "ko")
+  #   messages = use_case.messages(name: "Ada")
   #
-  #   prompton.with_generation(resolution, variables: { name: "Ada" }, input_messages: messages) do
-  #     call_your_provider(resolution.model, messages, resolution.params)
+  #   use_case.track(variables: { name: "Ada" }, input_messages: messages) do
+  #     call_your_provider(use_case.model, messages, use_case.params)
   #   end
   #
   # Clients are safe to share between threads and hold background threads of their own; call
@@ -91,17 +92,17 @@ module PromptOn
       install_exit_hook
     end
 
-    # --- resolution ----------------------------------------------------------
+    # --- use cases ----------------------------------------------------------
 
-    # Resolves a use case against the cached snapshot. Never makes an HTTP call within the cache
+    # Selects a use case against the cached document. Never makes an HTTP call within the cache
     # TTL, and never fails because PromptOn is unreachable while any tier holds a document.
     #
     # Raises PromptOn::UnknownUseCaseError, PromptOn::UnresolvedError,
     # PromptOn::UnknownPromptError, or PromptOn::NotReadyError when no tier has a document.
-    def resolve(use_case, prompt: nil)
+    def use_case(use_case, prompt: nil)
       entry = current_entry
       @poller.ensure_fresh
-      Resolver.resolve(entry.data, use_case, prompt: prompt, source: entry.source, etag: entry.etag)
+      UseCase.new(self, Resolver.resolve(entry.data, use_case, prompt: prompt, source: entry.source, etag: entry.etag))
     end
 
     # The prompt names the live deployment pins for a use case, sorted.
@@ -109,39 +110,35 @@ module PromptOn
       Resolver.prompt_names(current_entry.data, use_case)
     end
 
-    # Renders a resolution's prompt with this call's variables.
-    def render(resolution, variables = {})
-      resolution.render(variables)
-    end
-
-    # Resolves through POST /resolve instead of the snapshot. The simple path and the smoke test.
+    # Selects through the prompt endpoint instead of the document. The simple path and the smoke test.
     #
-    # Passing +variables+ renders them locally into the returned resolution: #messages (chat) or
+    # Passing +variables+ renders them locally into the returned use case: #messages (chat) or
     # #text (text) come back rendered, not as the template.
-    def remote_resolve(use_case, prompt: nil, environment: nil, variables: nil)
-      @resolve_client.resolve(use_case, prompt: prompt, environment: environment, variables: variables)
+    def remote_use_case(use_case, prompt: nil, environment: nil, variables: nil)
+      evidence = @resolve_client.resolve(use_case, prompt: prompt, environment: environment, variables: variables)
+      UseCase.new(self, evidence)
     end
 
-    # The raw POST /resolve response. Passing +variables+ asks the server to render.
-    def api_resolve(use_case, prompt: nil, environment: nil, variables: nil)
+    # The raw prompt endpoint response. Passing +variables+ asks the server to render.
+    def api_use_case(use_case, prompt: nil, environment: nil, variables: nil)
       @resolve_client.fetch(use_case, prompt: prompt, environment: environment, variables: variables)
     end
 
-    # --- snapshot ------------------------------------------------------------
+    # --- use-case document ---------------------------------------------------
 
-    # The document every resolve reads, or nil when no tier has produced one.
-    def snapshot
+    # The document every use-case selection reads, or nil when no tier has produced one.
+    def use_case_document
       @store.data
     end
 
     # Where the current document came from and how old it is.
-    def snapshot_info
+    def use_case_document_info
       @store.info
     end
 
     # Poll state: the last attempt, the consecutive failure count and how long the backoff or
     # Retry-After window still has to run.
-    def snapshot_status
+    def use_case_document_status
       @poller.status
     end
 
@@ -156,8 +153,8 @@ module PromptOn
     end
 
     # Writes the current document to +path+ (plus a sidecar with its ETag) so it can be committed
-    # as the app's bundled snapshot.
-    def export_snapshot(path)
+    # as the app's bundled use-case document.
+    def export_use_case_document(path)
       @store.export(path)
     end
 
@@ -171,15 +168,15 @@ module PromptOn
     #   client.log(use_case: "greeting", model: "openai/gpt-4o-mini", status: "ok",
     #              started_at: started_at, latency_ms: 842)
     #
-    # Fills in id (UUIDv7) and sdk, and — when a Resolution is passed — the deployment, prompt
-    # and resolution_source evidence. The four fields the server requires (use_case, model,
+    # Fills in id (UUIDv7) and sdk, and — when use-case evidence is passed — the deployment, prompt
+    # and source evidence. The four fields the server requires (use_case, model,
     # status, started_at) are yours to supply: a missing one raises PromptOn::InvalidRecordError
     # rather than being guessed, because a record built after the fact — a stream that has just
-    # finished, a background scorer, a replay — must carry the time the generation really
-    # started. #with_generation measures started_at for you.
-    def log(record = nil, resolution: nil, environment: nil, **fields)
+    # finished, a background scorer, a replay — must carry the time the provider call really
+    # started. #track measures started_at for you.
+    def log(record = nil, use_case_evidence: nil, environment: nil, **fields)
       prepared = prepare_record(Params.deep_stringify(record || {}).merge(Params.deep_stringify(fields)),
-                                resolution)
+                                unwrap_evidence(use_case_evidence))
 
       if @config.test?
         @capture_mutex.synchronize { @captured << prepared }
@@ -197,13 +194,13 @@ module PromptOn
     # The block's return value comes back unchanged. Return a PromptOn::Failure to record a
     # provider error without raising; an exception is logged as an error of kind "app" and then
     # re-raised as it was.
-    def with_generation(resolution, **meta, &)
-      sink = ->(record) { safe_log(record, resolution, meta[:environment]) }
-      Generation.call(resolution, meta, sink, &)
+    def track_use_case(evidence, **meta, &)
+      sink = ->(record) { safe_log(record, evidence, meta[:environment]) }
+      LogBuilder.call(evidence, meta, sink, &)
     end
 
     # A UUIDv7 to use as a monitoring-log id, issued up front so the app can store it too.
-    def generation_id
+    def log_id
       UuidV7.generate
     end
 
@@ -233,14 +230,14 @@ module PromptOn
       @capture_mutex.synchronize { @captured.clear }
     end
 
-    # Installs a snapshot document directly: a Hash, a JSON string, or a path to a JSON file.
-    def put_snapshot(document, source: "manual")
+    # Installs a use-case document directly: a Hash, a JSON string, or a path to a JSON file.
+    def put_use_case_document(document, source: "manual")
       document = read_document(document) if document.is_a?(String)
       @stub_document = document.is_a?(Hash) ? Params.deep_stringify(document) : nil
       @store.install_document(document, source: source)
     end
 
-    # Builds a minimal snapshot entry for one use case and merges it into the current one, so a
+    # Builds a minimal document entry for one use case and merges it into the current one, so a
     # test can stub exactly the call site it exercises.
     def stub(use_case, model:, messages: nil, text: nil, kind: "chat", prompt: "default",
              params: {}, provider_options: {}, default_params: {}, provider: "openrouter",
@@ -278,7 +275,7 @@ module PromptOn
         "display_name" => model.to_s, "metadata" => {}, "provider_options" => {}, "capabilities" => []
       }
 
-      put_snapshot(document, source: "manual")
+      put_use_case_document(document, source: "manual")
     end
 
     # --- lifecycle -----------------------------------------------------------
@@ -331,10 +328,10 @@ module PromptOn
         "prompt_versions" => {}, "models" => {} }
     end
 
-    # A monitoring log must never be the reason a generation fails, so the wrapper swallows what
+    # A monitoring log must never be the reason a provider call fails, so the wrapper swallows what
     # log would raise and says so once per record instead.
-    def safe_log(record, resolution, environment)
-      log(record, resolution: resolution, environment: environment)
+    def safe_log(record, evidence, environment)
+      log(record, use_case_evidence: evidence, environment: environment)
     rescue StandardError => e
       @config.logger.warn("[PromptOn] could not record the monitoring log: #{e.class}: #{e.message}")
       nil
@@ -348,38 +345,42 @@ module PromptOn
       entry
     end
 
-    def prepare_record(record, resolution)
+    def prepare_record(record, evidence)
       prepared = Params.deep_stringify(record)
       prepared["id"] ||= UuidV7.generate
       prepared["sdk"] ||= { "name" => SDK_NAME, "version" => VERSION }
-      merge_resolution(prepared, resolution) if resolution
+      merge_use_case(prepared, evidence) if evidence
 
       REQUIRED_RECORD_FIELDS.each do |field|
         raise InvalidRecordError, field if prepared[field].nil?
       end
 
-      Payload.apply(prepared, policy_for(prepared, resolution), **payload_config)
+      Payload.apply(prepared, policy_for(prepared, evidence), **payload_config)
     end
 
-    def merge_resolution(record, resolution)
-      { "use_case" => resolution.use_case, "kind" => resolution.kind, "model" => resolution.model,
-        "model_id" => resolution.model_id, "provider" => resolution.provider,
-        "deployment_id" => resolution.deployment_id,
-        "deployment_revision" => resolution.deployment_revision, "prompt" => resolution.prompt,
-        "prompt_version_id" => resolution.prompt_version_id,
-        "resolution_source" => resolution.source }.each do |key, value|
+    def merge_use_case(record, evidence)
+      { "use_case" => evidence.use_case, "kind" => evidence.kind, "model" => evidence.model,
+        "model_id" => evidence.model_id, "provider" => evidence.provider,
+        "deployment_id" => evidence.deployment_id,
+        "deployment_revision" => evidence.deployment_revision, "prompt" => evidence.prompt,
+        "prompt_version_id" => evidence.prompt_version_id,
+        "source" => evidence.source }.each do |key, value|
         record[key] = value if record[key].nil? && !value.nil?
       end
-      return unless record["params"] || !resolution.params.empty?
+      return unless record["params"] || !evidence.params.empty?
 
       record["params"] =
-        Params.merge(resolution.params, record["params"])
+        Params.merge(evidence.params, record["params"])
     end
 
-    def policy_for(record, resolution)
-      return resolution.payload_policy if resolution&.payload_policy
+    def policy_for(record, evidence)
+      return evidence.payload_policy if evidence&.payload_policy
 
-      snapshot&.use_case(record["use_case"])&.payload_policy
+      use_case_document&.use_case(record["use_case"])&.payload_policy
+    end
+
+    def unwrap_evidence(value)
+      value.is_a?(UseCase) ? value.__send__(:evidence) : value
     end
 
     def payload_config
@@ -392,7 +393,7 @@ module PromptOn
 
       @config.logger.warn(
         "[PromptOn] no API key configured (set PTN_API_KEY or pass api_key:); running on the " \
-        "disk cache and the bundled snapshot only, with no remote calls and no monitoring logs"
+        "disk cache and the bundled use-case document only, with no remote calls and no monitoring logs"
       )
     end
 

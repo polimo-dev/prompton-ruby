@@ -63,7 +63,7 @@ class PayloadTest < Minitest::Test
   end
 
   def test_the_redact_hook_runs_last_and_a_raising_hook_drops_the_payload
-    hook = ->(generation) { generation.merge("context" => { "redacted" => true }) }
+    hook = ->(log) { log.merge("context" => { "redacted" => true }) }
     result = PromptOn::Payload.apply(record, FULL, redact: hook)
     assert_equal({ "redacted" => true }, result["context"])
 

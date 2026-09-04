@@ -5,21 +5,21 @@ require_relative "errors"
 require_relative "params"
 
 module PromptOn
-  # A snapshot document is malformed.
+  # A use-case document is malformed.
   class InvalidSnapshotError < Error
     def code
       "invalid_snapshot"
     end
   end
 
-  # The snapshot declares a schema version this SDK does not read. Keep polling for a good one;
+  # The use-case document declares a schema version this SDK does not read. Keep polling for a good one;
   # never fall back to a hard-coded prompt.
   class UnsupportedSchemaVersionError < InvalidSnapshotError
     attr_reader :schema_version
 
     def initialize(schema_version)
       @schema_version = schema_version
-      super("snapshot schema version #{schema_version} is not supported " \
+      super("use-case document schema version #{schema_version} is not supported " \
             "(this SDK reads version #{SnapshotData::SCHEMA_VERSION})")
     end
 
@@ -28,19 +28,19 @@ module PromptOn
     end
   end
 
-  # A non-fatal observation made while decoding a snapshot or resolving against it.
+  # A non-fatal observation made while decoding a use-case document or selecting from it.
   Warning = Struct.new(:kind, :value) do
     def to_s
       "#{kind}: #{value}"
     end
   end
 
-  # The decoded `GET /snapshot` document (schema v3).
+  # The decoded `GET /use-cases` document (schema v4).
   #
   # A deployment revision is a pin, not a router: one revision is one model plus one pinned
   # prompt version per prompt name. v1 and v2 documents are refused.
   class SnapshotData
-    SCHEMA_VERSION = 3
+    SCHEMA_VERSION = 4
     KINDS = %w[chat text embedding].freeze
     ENGINES = %w[liquid raw].freeze
     PAYLOAD_MODES = %w[full hash none].freeze
@@ -65,16 +65,16 @@ module PromptOn
       # Decodes a JSON document. Raises PromptOn::InvalidSnapshotError.
       def parse(json)
         document = JSON.parse(json)
-        raise InvalidSnapshotError, "snapshot must be a JSON object" unless document.is_a?(Hash)
+        raise InvalidSnapshotError, "use-case document must be a JSON object" unless document.is_a?(Hash)
 
         from_hash(document)
       rescue JSON::ParserError => e
-        raise InvalidSnapshotError, "snapshot is not valid JSON: #{e.message}"
+        raise InvalidSnapshotError, "use-case document is not valid JSON: #{e.message}"
       end
 
       # Decodes an already-parsed document. String and symbol keys are both accepted.
       def from_hash(document)
-        raise InvalidSnapshotError, "snapshot must be an object" unless document.is_a?(Hash)
+        raise InvalidSnapshotError, "use-case document must be an object" unless document.is_a?(Hash)
 
         new(Params.deep_stringify(document))
       end
@@ -110,20 +110,12 @@ module PromptOn
     private
 
     def check_schema_version(document)
-      version = document["schema_version"] || document["version"]
-      return SCHEMA_VERSION if version.nil? && document["deployments"].is_a?(Hash)
+      version = document["schema_version"]
       raise InvalidSnapshotError, "schema_version is required" if version.nil?
-      unless version.is_a?(Integer) && version.positive?
-        raise InvalidSnapshotError,
-              "schema_version must be a positive integer"
-      end
+      raise InvalidSnapshotError, "schema_version must be an integer" unless version.is_a?(Integer)
       return version if version == SCHEMA_VERSION
 
-      raise UnsupportedSchemaVersionError, version if version < SCHEMA_VERSION
-
-      # Newer minor documents stay readable: additive changes only, so decode what we know.
-      @warnings << Warning.new("unknown_schema_version", version)
-      version
+      raise UnsupportedSchemaVersionError, version
     end
 
     def decode_use_cases(raw)

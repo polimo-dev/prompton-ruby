@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# A complete PromptOn call: resolve the pin, render the prompt, call the provider, log the result.
+# A complete PromptOn call: select the use case, render the prompt, call the provider, log the result.
 #
 #   PTN_API_KEY=ptn_yourproject_… ruby examples/greeting.rb
 #
@@ -12,18 +12,18 @@ require "prompton"
 
 prompton = PromptOn::Client.new(
   environment: ENV.fetch("PTN_ENVIRONMENT", "production"),
-  bundle: File.expand_path("snapshot.production.json", __dir__)
+  bundle: File.expand_path("use-cases.production.json", __dir__)
 )
 
-resolution = prompton.resolve("greeting", prompt: ENV.fetch("PROMPT", "default"))
+use_case = prompton.use_case("greeting", prompt: ENV.fetch("PROMPT", "default"))
 variables = { name: ENV.fetch("NAME", "Ada") }
-messages = resolution.render(variables)
+messages = use_case.messages(variables)
 
-puts "model:    #{resolution.model} (#{resolution.provider})"
-puts "pin:      deployment #{resolution.deployment_id} revision #{resolution.deployment_revision}"
-puts "prompt:   #{resolution.prompt} (version #{resolution.prompt_version_number}) " \
-     "of #{resolution.available_prompts.join(", ")}"
-puts "params:   #{resolution.params}"
+puts "model:    #{use_case.model} (#{use_case.provider})"
+puts "pin:      deployment #{use_case.deployment_id} revision #{use_case.deployment_revision}"
+puts "prompt:   #{use_case.prompt} (version #{use_case.prompt_version_number}) " \
+     "of #{use_case.prompt_names.join(", ")}"
+puts "params:   #{use_case.params}"
 puts "messages: #{messages.inspect}"
 puts
 
@@ -36,14 +36,13 @@ def call_provider(model, messages, params)
     cost_usd: 0.000112, cost_source: "provider" }
 end
 
-outcome = prompton.with_generation(
-  resolution,
+result = use_case.track(
   variables: variables, input_messages: messages,
   end_user_ref: "user-42", trace_id: "example:1", context: { language: "en" }
 ) do
-  call_provider(resolution.model, messages, resolution.params)
+  call_provider(use_case.model, messages, use_case.params)
 end
 
-puts "completion: #{outcome[:content]}"
+puts "completion: #{result[:content]}"
 puts "flush:      #{prompton.flush}"
 prompton.close

@@ -23,52 +23,52 @@ class SnapshotCacheTest < Minitest::Test
   def test_within_the_ttl_every_resolve_is_served_from_memory_with_no_http_call
     client = build_client(cache_ttl: 30.0)
 
-    10.times { assert_equal "openai/gpt-4o-mini", client.resolve("greeting").model }
+    10.times { assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model }
 
     assert_equal 1, @server.request_count, "one boot fetch, then nothing"
   end
 
   def test_after_the_ttl_the_document_is_refreshed_with_if_none_match
     client = build_client(cache_ttl: 0.05)
-    client.resolve("greeting")
+    client.use_case("greeting")
 
     sleep(0.1)
-    client.resolve("greeting")
+    client.use_case("greeting")
 
     wait_until { @server.request_count >= 2 }
     assert_equal "\"v1\"", @server.recorded.last.headers["if-none-match"]
-    assert_equal "remote", client.snapshot_info[:source]
+    assert_equal "remote", client.use_case_document_info[:source]
   end
 
   def test_a_304_leaves_the_document_in_place
     client = build_client(cache_ttl: 0.05)
-    client.resolve("greeting")
+    client.use_case("greeting")
     sleep(0.1)
 
     assert client.refresh
     assert_equal 304, last_status
-    assert_equal "openai/gpt-4o-mini", client.resolve("greeting").model
+    assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model
   end
 
   def test_a_new_revision_is_picked_up_on_the_next_poll
     client = build_client(cache_ttl: 0.05)
-    assert_in_delta 0.2, client.resolve("greeting").params["temperature"]
+    assert_in_delta 0.2, client.use_case("greeting").params["temperature"]
 
     @state[:body] = snapshot_json(temperature: 0.9)
     @state[:etag] = "\"v2\""
     sleep(0.1)
     client.refresh
 
-    assert_in_delta 0.9, client.resolve("greeting").params["temperature"]
+    assert_in_delta 0.9, client.use_case("greeting").params["temperature"]
   end
 
   def test_a_burst_of_concurrent_resolves_costs_one_refresh_not_one_each
     client = build_client(cache_ttl: 0.05)
-    client.resolve("greeting")
+    client.use_case("greeting")
     @state[:delay] = 0.05
     sleep(0.1)
 
-    threads = Array.new(20) { Thread.new { client.resolve("greeting").model } }
+    threads = Array.new(20) { Thread.new { client.use_case("greeting").model } }
     assert_equal ["openai/gpt-4o-mini"], threads.map(&:value).uniq
 
     wait_until { @server.request_count >= 2 }
@@ -76,22 +76,22 @@ class SnapshotCacheTest < Minitest::Test
     assert_equal 2, @server.request_count
   end
 
-  def test_resolutions_are_frozen_so_they_can_be_shared_between_threads
+  def test_resolved_evidence_is_frozen_so_it_can_be_shared_between_threads
     client = build_client
-    resolution = client.resolve("greeting")
+    use_case = client.use_case("greeting")
 
-    assert_predicate resolution, :frozen?
-    assert_predicate client.snapshot, :frozen?
+    assert_predicate use_case.__send__(:evidence), :frozen?
+    assert_predicate client.use_case_document, :frozen?
   end
 
-  def test_a_refresh_in_flight_never_blocks_a_generation
+  def test_a_refresh_in_flight_never_blocks_a_provider_call
     client = build_client(cache_ttl: 0.05)
-    client.resolve("greeting")
+    client.use_case("greeting")
 
     @state[:delay] = 1.0
     sleep(0.1)
     started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-    client.resolve("greeting")
+    client.use_case("greeting")
     elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
 
     assert_operator elapsed, :<, 0.3, "the stale-while-revalidate refresh must not block the caller"
@@ -99,7 +99,7 @@ class SnapshotCacheTest < Minitest::Test
 
   def test_a_429_waits_out_retry_after_and_the_caller_never_sees_an_error
     client = build_client(cache_ttl: 0.01)
-    client.resolve("greeting")
+    client.use_case("greeting")
 
     @state[:status] = 429
     @state[:retry_after] = 30
@@ -108,7 +108,7 @@ class SnapshotCacheTest < Minitest::Test
 
     5.times do
       sleep(0.02)
-      assert_equal "openai/gpt-4o-mini", client.resolve("greeting").model
+      assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model
     end
 
     assert_equal after_429, @server.request_count, "no request before Retry-After has elapsed"
@@ -117,7 +117,7 @@ class SnapshotCacheTest < Minitest::Test
 
   def test_retry_after_can_also_arrive_in_the_error_details
     client = build_client(cache_ttl: 0.01)
-    client.resolve("greeting")
+    client.use_case("greeting")
 
     @state[:status] = :rate_limited_with_details
     refute client.refresh
@@ -125,58 +125,58 @@ class SnapshotCacheTest < Minitest::Test
 
     3.times do
       sleep(0.02)
-      client.resolve("greeting")
+      client.use_case("greeting")
     end
 
     assert_equal after_429, @server.request_count
-    assert_operator client.snapshot_status[:next_attempt_in], :>, 25
+    assert_operator client.use_case_document_status[:next_attempt_in], :>, 25
   end
 
   def test_a_5xx_backs_off_from_the_ttl_doubling_each_time
     client = build_client(cache_ttl: 1.0)
-    client.resolve("greeting")
+    client.use_case("greeting")
     @state[:status] = 503
 
     refute client.refresh
-    assert_in_delta 1.0, client.snapshot_status[:next_attempt_in], 0.2
+    assert_in_delta 1.0, client.use_case_document_status[:next_attempt_in], 0.2
 
     refute client.refresh
-    assert_in_delta 2.0, client.snapshot_status[:next_attempt_in], 0.2
+    assert_in_delta 2.0, client.use_case_document_status[:next_attempt_in], 0.2
 
     refute client.refresh
-    assert_in_delta 4.0, client.snapshot_status[:next_attempt_in], 0.2
+    assert_in_delta 4.0, client.use_case_document_status[:next_attempt_in], 0.2
   end
 
   def test_a_5xx_keeps_serving_the_previous_document
     client = build_client(cache_ttl: 1.0)
-    client.resolve("greeting")
+    client.use_case("greeting")
 
     @state[:status] = 503
     refute client.refresh
     after_failure = @server.request_count
 
-    3.times { assert_equal "openai/gpt-4o-mini", client.resolve("greeting").model }
+    3.times { assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model }
 
     assert_equal after_failure, @server.request_count, "no request before the backoff has elapsed"
-    assert client.snapshot_info[:stale]
-    assert_equal 1, client.snapshot_status[:failures]
+    assert client.use_case_document_info[:stale]
+    assert_equal 1, client.use_case_document_status[:failures]
   end
 
   def test_when_prompton_is_down_the_previous_document_still_answers
     client = build_client(cache_ttl: 0.01)
-    client.resolve("greeting")
+    client.use_case("greeting")
     @server.stop
 
     3.times do
       sleep(0.02)
-      assert_equal "openai/gpt-4o-mini", client.resolve("greeting").model
+      assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model
     end
   end
 
   def test_a_cold_start_with_nothing_cached_fails_with_a_clear_error
     client = build_client(host: PromptOnTest::StubServer.dead_url)
 
-    error = assert_raises(PromptOn::NotReadyError) { client.resolve("greeting") }
+    error = assert_raises(PromptOn::NotReadyError) { client.use_case("greeting") }
 
     assert_includes error.message, "unreachable"
     assert_includes error.message, "nothing is cached"
@@ -215,7 +215,7 @@ class SnapshotCacheTest < Minitest::Test
     client = build_client(disk_cache: disk_path, bundle: bundle_path)
     @state[:delay] = 0.2
 
-    assert_equal "bundle", client.resolve("greeting").source
+    assert_equal "bundle", client.use_case("greeting").source
     client.close
 
     assert_path_exists disk_path, "the in-flight refresh finishes before close returns"
@@ -223,14 +223,14 @@ class SnapshotCacheTest < Minitest::Test
   end
 
   def test_the_disk_cache_survives_a_restart_with_prompton_down
-    build_client(disk_cache: disk_path).resolve("greeting")
+    build_client(disk_cache: disk_path).use_case("greeting")
     @server.stop
 
     restarted = build_client(disk_cache: disk_path, host: PromptOnTest::StubServer.dead_url)
 
-    assert_equal "openai/gpt-4o-mini", restarted.resolve("greeting").model
-    assert_equal "disk", restarted.snapshot_info[:source]
-    assert_equal "disk", restarted.resolve("greeting").source
+    assert_equal "openai/gpt-4o-mini", restarted.use_case("greeting").model
+    assert_equal "disk", restarted.use_case_document_info[:source]
+    assert_equal "disk", restarted.use_case("greeting").source
   end
 
   def test_the_bundle_answers_when_memory_and_disk_are_empty
@@ -238,7 +238,7 @@ class SnapshotCacheTest < Minitest::Test
     client = build_client(disk_cache: File.join(@dir, "absent.json"), bundle: bundle_path,
                           host: PromptOnTest::StubServer.dead_url)
 
-    assert_equal "bundle", client.resolve("greeting").source
+    assert_equal "bundle", client.use_case("greeting").source
   end
 
   def test_a_bundle_from_another_environment_is_refused
@@ -246,7 +246,7 @@ class SnapshotCacheTest < Minitest::Test
     client = build_client(disk_cache: false, bundle: bundle_path,
                           host: PromptOnTest::StubServer.dead_url)
 
-    assert_raises(PromptOn::NotReadyError) { client.resolve("greeting") }
+    assert_raises(PromptOn::NotReadyError) { client.use_case("greeting") }
   end
 
   def test_fetch_once_now_is_available_for_scripts
@@ -268,12 +268,12 @@ class SnapshotCacheTest < Minitest::Test
 
   def test_the_current_document_can_be_exported_as_a_bundle
     client = build_client
-    client.resolve("greeting")
+    client.use_case("greeting")
 
-    client.export_snapshot(bundle_path)
+    client.export_use_case_document(bundle_path)
 
     offline = build_client(mode: :offline, api_key: nil, disk_cache: false, bundle: bundle_path)
-    assert_equal "bundle", offline.resolve("greeting").source
+    assert_equal "bundle", offline.use_case("greeting").source
   end
 
   private
@@ -283,7 +283,7 @@ class SnapshotCacheTest < Minitest::Test
   end
 
   def bundle_path
-    File.join(@dir, "snapshot.production.json")
+    File.join(@dir, "use-cases.production.json")
   end
 
   attr_reader :last_status

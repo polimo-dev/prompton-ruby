@@ -16,8 +16,8 @@ module PromptOn
     end
   end
 
-  # No snapshot is available from any tier (memory, disk, bundle, remote), so nothing can be
-  # resolved. This is the only resolution failure caused by PromptOn being unreachable.
+  # No use-case document is available from any tier (memory, disk, bundle, remote), so nothing can be
+  # resolved. This is the only use-case selection failure caused by PromptOn being unreachable.
   class NotReadyError < Error
     def initialize(message = "PromptOn is unreachable and nothing is cached " \
                              "(memory, disk and bundle are all empty)")
@@ -29,7 +29,7 @@ module PromptOn
     end
   end
 
-  # The snapshot holds no use case with this key.
+  # The use-case document holds no use case with this key.
   class UnknownUseCaseError < Error
     attr_reader :use_case
 
@@ -61,14 +61,14 @@ module PromptOn
   # fallback to "default": shipping English to a request that asked for "ko" is worse than an
   # error.
   class UnknownPromptError < Error
-    attr_reader :use_case, :prompt, :available_prompts
+    attr_reader :use_case, :prompt, :prompt_names
 
-    def initialize(use_case, prompt, available_prompts)
+    def initialize(use_case, prompt, prompt_names)
       @use_case = use_case
       @prompt = prompt
-      @available_prompts = available_prompts
+      @prompt_names = prompt_names
       super("the live deployment of #{use_case} pins no prompt named #{prompt.inspect} — " \
-            "available prompts: #{available_prompts.join(", ")}")
+            "prompt names: #{prompt_names.join(", ")}")
     end
 
     def code

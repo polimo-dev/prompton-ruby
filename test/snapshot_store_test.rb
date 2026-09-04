@@ -83,10 +83,10 @@ class SnapshotStoreTest < Minitest::Test
     store = build_store(disk_cache: false)
     store.install_remote(snapshot_json, etag: "\"v7\"")
 
-    store.export(path("snapshot.production.json"))
+    store.export(path("use-cases.production.json"))
 
-    assert_equal JSON.parse(snapshot_json), JSON.parse(File.read(path("snapshot.production.json")))
-    assert_equal "\"v7\"", JSON.parse(File.read(path("snapshot.production.json.meta.json")))["etag"]
+    assert_equal JSON.parse(snapshot_json), JSON.parse(File.read(path("use-cases.production.json")))
+    assert_equal "\"v7\"", JSON.parse(File.read(path("use-cases.production.json.meta.json")))["etag"]
   end
 
   def test_export_without_a_document_says_so

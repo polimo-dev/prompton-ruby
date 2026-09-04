@@ -3,8 +3,8 @@
 module PromptOn
   # Shallow merge helper for parameter maps.
   #
-  #   effective_params           = use_case.default_params <- deployment.params
-  #   effective_provider_options = model.provider_options   <- deployment.provider_options
+  #   params           = use_case.default_params <- deployment.params
+  #   provider_options = model.provider_options   <- deployment.provider_options
   #
   # The merge is shallow: a nested hash on the right replaces the left side whole. Keys are
   # normalised to strings so that `{temperature: 0.7}` and `{"temperature" => 0.5}` are the same

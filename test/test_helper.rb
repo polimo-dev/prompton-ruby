@@ -37,7 +37,7 @@ module PromptOnTest
   # A snapshot document with the three kinds of use case, ready to serve or write to disk.
   def snapshot_document(environment: "production", project: "sdkfixture", temperature: 0.2)
     {
-      "schema_version" => 3, "project" => project, "environment" => environment,
+      "schema_version" => 4, "project" => project, "environment" => environment,
       "use_cases" => {
         "greeting" => {
           "id" => "0198f2a1-0000-7000-8000-00000000c001", "kind" => "chat",

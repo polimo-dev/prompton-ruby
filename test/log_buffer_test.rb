@@ -162,7 +162,7 @@ class LogBufferTest < Minitest::Test
 
   def test_a_413_batch_is_split_in_half
     @behaviour = lambda do |request|
-      JSON.parse(request.body)["generations"].length > 2 ? [413, {}, { "error" => {} }] : ok
+      JSON.parse(request.body)["logs"].length > 2 ? [413, {}, { "error" => {} }] : ok
     end
     buffer = build_buffer
     4.times { |index| buffer.enqueue(record(index)) }
@@ -230,7 +230,7 @@ class LogBufferTest < Minitest::Test
   end
 
   def sent_batches
-    @server.recorded.map { |request| JSON.parse(request.body)["generations"] }
+    @server.recorded.map { |request| JSON.parse(request.body)["logs"] }
   end
 
   def record(index)

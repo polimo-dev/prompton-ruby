@@ -28,7 +28,7 @@ class ResolverTest < Minitest::Test
 
     assert_equal "default", default.prompt
     assert_equal "ko", korean.prompt
-    assert_equal %w[default ko], korean.available_prompts
+    assert_equal %w[default ko], korean.prompt_names
     refute_equal default.prompt_version_id, korean.prompt_version_id
     assert_equal default.model, korean.model
   end
@@ -39,7 +39,7 @@ class ResolverTest < Minitest::Test
     end
 
     assert_equal "fr", error.prompt
-    assert_equal %w[default ko], error.available_prompts
+    assert_equal %w[default ko], error.prompt_names
     assert_equal "unknown_prompt", error.code
   end
 
@@ -54,7 +54,7 @@ class ResolverTest < Minitest::Test
     assert_equal "embedding", resolution.kind
     assert_nil resolution.prompt
     assert_nil resolution.prompt_version_id
-    assert_empty resolution.available_prompts
+    assert_empty resolution.prompt_names
     assert_equal "openai/text-embedding-3-small", resolution.model
   end
 
@@ -78,19 +78,21 @@ class ResolverTest < Minitest::Test
                  resolution.warnings.map(&:to_s)
   end
 
-  def test_an_older_schema_version_is_refused
-    error = assert_raises(PromptOn::UnsupportedSchemaVersionError) do
-      PromptOn::SnapshotData.from_hash(snapshot_document.merge("schema_version" => 2))
+  def test_schema_version_must_be_exactly_four
+    [3, 5].each do |version|
+      error = assert_raises(PromptOn::UnsupportedSchemaVersionError) do
+        PromptOn::SnapshotData.from_hash(snapshot_document.merge("schema_version" => version))
+      end
+      assert_equal version, error.schema_version
     end
 
-    assert_equal 2, error.schema_version
-  end
+    missing = snapshot_document.except("schema_version")
+    assert_raises(PromptOn::InvalidSnapshotError) { PromptOn::SnapshotData.from_hash(missing) }
+    legacy = snapshot_document.except("schema_version").merge("version" => 4)
+    assert_raises(PromptOn::InvalidSnapshotError) { PromptOn::SnapshotData.from_hash(legacy) }
 
-  def test_a_newer_schema_version_decodes_with_a_warning
     data = PromptOn::SnapshotData.from_hash(snapshot_document.merge("schema_version" => 4))
-
     assert_equal 4, data.schema_version
-    assert_equal ["unknown_schema_version: 4"], data.warnings.map(&:to_s)
     assert_equal "openai/gpt-4o-mini", PromptOn::Resolver.resolve(data, "greeting").model
   end
 

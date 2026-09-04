@@ -25,15 +25,15 @@ module PromptOn
     module_function
 
     # Returns the record with the policy applied.
-    def apply(generation, policy, payload_defaults: nil, hash_end_user: false, redact: nil, logger: nil)
+    def apply(log, policy, payload_defaults: nil, hash_end_user: false, redact: nil, logger: nil)
       policy = normalize_policy(policy, payload_defaults)
-      result = apply_mode(generation, policy)
+      result = apply_mode(log, policy)
       result = cap_error_message(result)
       result = hash_end_user_ref(result, hash_end_user)
       run_redact(result, redact, logger)
     end
 
-    # Normalises a snapshot payload_policy over the SDK defaults. sample_rate is clamped to 0..1.
+    # Normalises a use-case document payload_policy over the SDK defaults. sample_rate is clamped to 0..1.
     def normalize_policy(policy, defaults = nil)
       defaults = DEFAULTS.merge(defaults || {})
       policy = policy.is_a?(Hash) ? symbolize(policy) : {}
@@ -50,13 +50,13 @@ module PromptOn
 
     # Whether to keep this record's raw text. Errors and truncations always; otherwise
     # bucket(id) < round(rate * 10_000).
-    def keep?(generation, rate)
-      return true if generation["status"].to_s == "error"
-      return true if generation["stop_kind"].to_s == "length"
+    def keep?(log, rate)
+      return true if log["status"].to_s == "error"
+      return true if log["stop_kind"].to_s == "length"
       return true if rate >= 1.0
       return false if rate <= 0.0
 
-      bucket(generation["id"]) < (rate * SAMPLE_SCALE).round
+      bucket(log["id"]) < (rate * SAMPLE_SCALE).round
     end
 
     # Sampling bucket 0..9999: the first 4 bytes of sha256(id) read as an unsigned big-endian
@@ -107,27 +107,27 @@ module PromptOn
 
     # --- mode ----------------------------------------------------------------
 
-    def apply_mode(generation, policy)
-      return drop_payload(generation) if policy[:mode] == "none"
-      return drop_payload(generation) unless keep?(generation, policy[:sample_rate])
+    def apply_mode(log, policy)
+      return drop_payload(log) if policy[:mode] == "none"
+      return drop_payload(log) unless keep?(log, policy[:sample_rate])
 
-      wrapped = wrap_payload(generation)
+      wrapped = wrap_payload(log)
       policy[:mode] == "hash" ? hash_payload(wrapped) : truncate_payload(wrapped, policy[:max_bytes])
     end
 
-    def drop_payload(generation)
-      generation.except("input", "output")
+    def drop_payload(log)
+      log.except("input", "output")
     end
 
-    def wrap_payload(generation)
-      result = generation.dup
+    def wrap_payload(log)
+      result = log.dup
       result["input"] = { "text" => result["input"] } if result["input"].is_a?(String)
       result["output"] = { "content" => result["output"] } if result["output"].is_a?(String)
       result
     end
 
-    def hash_payload(generation)
-      result = generation.dup
+    def hash_payload(log)
+      result = log.dup
       %w[input output].each do |key|
         next if result[key].nil?
 
@@ -139,8 +139,8 @@ module PromptOn
 
     # --- full truncation -----------------------------------------------------
 
-    def truncate_payload(generation, max_bytes)
-      result = generation.dup
+    def truncate_payload(log, max_bytes)
+      result = log.dup
       { "input" => method(:truncate_input), "output" => method(:truncate_output) }.each do |key, fn|
         next unless result.key?(key)
 
@@ -346,34 +346,34 @@ module PromptOn
 
     # --- tail steps ----------------------------------------------------------
 
-    def cap_error_message(generation)
-      error = generation["error"]
-      return generation unless error.is_a?(Hash)
+    def cap_error_message(log)
+      error = log["error"]
+      return log unless error.is_a?(Hash)
 
       message = error["message"]
-      return generation unless message.is_a?(String) && message.bytesize > ERROR_MESSAGE_MAX
+      return log unless message.is_a?(String) && message.bytesize > ERROR_MESSAGE_MAX
 
-      generation.merge("error" => error.merge("message" => truncate_string(message, ERROR_MESSAGE_MAX).first))
+      log.merge("error" => error.merge("message" => truncate_string(message, ERROR_MESSAGE_MAX).first))
     end
 
-    def hash_end_user_ref(generation, enabled)
-      return generation unless enabled
-      return generation if generation["end_user_ref"].nil?
+    def hash_end_user_ref(log, enabled)
+      return log unless enabled
+      return log if log["end_user_ref"].nil?
 
-      generation.merge("end_user_ref" => sha256_hex(generation["end_user_ref"].to_s))
+      log.merge("end_user_ref" => sha256_hex(log["end_user_ref"].to_s))
     end
 
-    def run_redact(generation, hook, logger)
-      return generation if hook.nil?
+    def run_redact(log, hook, logger)
+      return log if hook.nil?
 
-      result = hook.call(generation)
+      result = hook.call(log)
       return result if result.is_a?(Hash)
 
       logger&.warn("[PromptOn] redact hook returned #{result.class}; dropping the payload")
-      drop_payload(generation)
+      drop_payload(log)
     rescue StandardError => e
       logger&.warn("[PromptOn] redact hook raised #{e.class}: #{e.message}; dropping the payload")
-      drop_payload(generation)
+      drop_payload(log)
     end
 
     # --- string helpers ------------------------------------------------------

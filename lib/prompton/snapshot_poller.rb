@@ -8,7 +8,7 @@ module PromptOn
   # Within the cache TTL (10 s by default) every resolve is served from memory with no HTTP call.
   # Once the TTL has passed the document is refreshed with `If-None-Match` — in a background poll
   # loop, or, when polling is off, by a stale-while-revalidate refresh the next call triggers.
-  # A refresh never blocks and never fails a generation: while one is in flight, and if it fails,
+  # A refresh never blocks and never fails a log: while one is in flight, and if it fails,
   # the previous document is what every resolve reads.
   #
   # On 429 the Retry-After header (then error.details.retry_after, then the backoff) decides when

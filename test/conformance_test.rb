@@ -7,7 +7,7 @@ require_relative "test_helper"
 # to, or how a monitoring log is truncated, an app that talks to PromptOn from two languages gets
 # two different answers. That is what these files prevent.
 class ConformanceTest < Minitest::Test
-  FILES = %w[template.json resolve.json truncation.json stop_kind.json generation_record.json].freeze
+  FILES = %w[template.json use_case.json truncation.json stop_kind.json log_record.json].freeze
   REQUIRED_RECORD_FIELDS = %w[id use_case model status started_at].freeze
   ERROR_KINDS = %w[http_4xx http_5xx rate_limited timeout transport parse app].freeze
   KINDS = %w[chat text embedding].freeze
@@ -71,23 +71,23 @@ class ConformanceTest < Minitest::Test
     assert_equal %w[liquid raw], document["engines"].sort
   end
 
-  # --- resolve.json --------------------------------------------------------
+  # --- use_case.json --------------------------------------------------------
 
-  def test_every_conformance_snapshot_decodes_as_schema_v3
-    conformance("resolve.json")["snapshots"].each do |reference, raw|
+  def test_every_conformance_document_decodes_as_schema_v4
+    conformance("use_case.json")["documents"].each do |reference, raw|
       data = PromptOn::SnapshotData.from_hash(raw)
       assert_equal PromptOn::SnapshotData::SCHEMA_VERSION, data.schema_version, reference
     end
   end
 
   def test_resolve_cases
-    document = conformance("resolve.json")
+    document = conformance("use_case.json")
     assert_equal document["default_prompt"], PromptOn::Resolver::DEFAULT_PROMPT
 
-    snapshots = document["snapshots"].transform_values { |raw| PromptOn::SnapshotData.from_hash(raw) }
+    snapshots = document["documents"].transform_values { |raw| PromptOn::SnapshotData.from_hash(raw) }
 
     document["cases"].each do |kase|
-      data = snapshots.fetch(kase["snapshot_ref"])
+      data = snapshots.fetch(kase["document_ref"])
       assert_equal kase["environment"], data.environment, "environment of #{kase["name"]}"
       assert_equal kase["expect"], resolve_expectation(data, kase), "resolve case #{kase["name"]}"
     end
@@ -97,9 +97,9 @@ class ConformanceTest < Minitest::Test
 
   def test_payload_policy_cases
     conformance("truncation.json")["cases"].each do |kase|
-      actual = PromptOn::Payload.apply(kase["generation"], symbolized_policy(kase["policy"]),
+      actual = PromptOn::Payload.apply(kase["log"], symbolized_policy(kase["policy"]),
                                        hash_end_user: kase.dig("config", "hash_end_user") == true)
-      assert_equal kase["expect"]["generation"], actual, "truncation case #{kase["name"]}"
+      assert_equal kase["expect"]["log"], actual, "truncation case #{kase["name"]}"
     end
   end
 
@@ -113,9 +113,9 @@ class ConformanceTest < Minitest::Test
   def test_every_truncated_string_stays_valid_utf8_and_within_its_cap
     conformance("truncation.json")["cases"].each do |kase|
       max_bytes = kase["policy"]["max_bytes"]
-      generation = kase["expect"]["generation"]
+      log = kase["expect"]["log"]
 
-      (generation.dig("input", "messages") || []).each do |message|
+      (log.dig("input", "messages") || []).each do |message|
         next unless message["content"].is_a?(String)
 
         assert_predicate message["content"], :valid_encoding?, "#{kase["name"]}: message content"
@@ -123,7 +123,7 @@ class ConformanceTest < Minitest::Test
                         "#{kase["name"]}: per-message cap"
       end
 
-      content = generation.dig("output", "content")
+      content = log.dig("output", "content")
       next unless content.is_a?(String)
 
       assert_predicate content, :valid_encoding?, "#{kase["name"]}: output content"
@@ -146,10 +146,10 @@ class ConformanceTest < Minitest::Test
     end
   end
 
-  # --- generation_record.json ----------------------------------------------
+  # --- log_record.json ----------------------------------------------
 
   def test_golden_records_satisfy_the_ingest_rules
-    conformance("generation_record.json")["records"].each do |entry|
+    conformance("log_record.json")["records"].each do |entry|
       record = entry["record"]
       name = entry["name"]
 
@@ -163,7 +163,7 @@ class ConformanceTest < Minitest::Test
       assert_optional_enum(record["kind"], KINDS, "#{name}: kind")
       assert_optional_enum(record["provider"], PROVIDERS, "#{name}: provider")
       assert_optional_enum(record["stop_kind"], PromptOn::StopKind::ALL, "#{name}: stop_kind")
-      assert_optional_enum(record["resolution_source"], RESOLUTION_SOURCES, "#{name}: resolution_source")
+      assert_optional_enum(record["source"], RESOLUTION_SOURCES, "#{name}: resolution_source")
       assert_optional_enum(record.dig("usage", "cost_source"), COST_SOURCES, "#{name}: cost_source")
 
       %w[deployment_id prompt_version_id model_id].each do |key|
@@ -188,7 +188,7 @@ class ConformanceTest < Minitest::Test
   end
 
   def test_golden_records_pass_the_default_payload_policy_unchanged
-    conformance("generation_record.json")["records"].each do |entry|
+    conformance("log_record.json")["records"].each do |entry|
       policy = { mode: "full", sample_rate: 1.0, max_bytes: 262_144 }
       assert_equal entry["record"], PromptOn::Payload.apply(entry["record"], policy),
                    "#{entry["name"]} should pass through the payload policy unchanged"
@@ -196,10 +196,10 @@ class ConformanceTest < Minitest::Test
   end
 
   def test_batch_envelope_holds_exactly_the_documented_records
-    document = conformance("generation_record.json")
+    document = conformance("log_record.json")
     records = document["records"].map { |entry| entry["record"] }
 
-    assert_equal records, document["batch_envelope"]["request"]["generations"]
+    assert_equal records, document["batch_envelope"]["request"]["logs"]
     assert_equal records.length, document["batch_envelope"]["response_example"]["accepted"]
     assert_equal records.length, document["batch_envelope"]["response_on_resend"]["duplicates"]
     assert_operator records.length, :<=, document["endpoint"]["max_records_per_request"]
@@ -230,19 +230,22 @@ class ConformanceTest < Minitest::Test
   def resolve_expectation(data, kase)
     resolution = PromptOn::Resolver.resolve(data, kase["use_case"], prompt: kase["prompt"])
     expectation = {
-      "kind" => resolution.kind, "deployment_id" => resolution.deployment_id,
+      "key" => resolution.use_case, "kind" => resolution.kind, "deployment_id" => resolution.deployment_id,
       "revision" => resolution.deployment_revision, "prompt" => resolution.prompt,
-      "prompts" => resolution.available_prompts, "model_id" => resolution.model_id,
+      "prompt_names" => resolution.prompt_names, "model_id" => resolution.model_id,
       "model" => resolution.model, "provider" => resolution.provider,
-      "effective_params" => resolution.params,
-      "effective_provider_options" => resolution.provider_options,
+      "params" => resolution.params,
+      "provider_options" => resolution.provider_options,
       "prompt_version" => resolution.prompt_version_id &&
                           { "id" => resolution.prompt_version_id, "number" => resolution.prompt_version_number },
+      "source" => resolution.source,
       "warnings" => resolution.warnings.map(&:to_s)
     }
     expectation.merge(rendered(resolution, kase["variables"]))
   rescue PromptOn::UnknownPromptError => e
-    { "error" => "unknown_prompt", "prompt" => e.prompt, "available_prompts" => e.available_prompts }
+    { "error" => "unknown_prompt", "key" => e.use_case, "prompt" => e.prompt, "prompt_names" => e.prompt_names }
+  rescue PromptOn::UnknownUseCaseError => e
+    { "error" => "unknown_use_case", "key" => e.use_case }
   rescue PromptOn::MissingVariableError => e
     { "error" => "missing_variable", "variable" => e.variable }
   rescue PromptOn::Error => e

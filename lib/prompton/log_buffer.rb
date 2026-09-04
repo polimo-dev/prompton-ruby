@@ -4,7 +4,7 @@ require "json"
 require_relative "errors"
 
 module PromptOn
-  # Batches monitoring logs and sends them to POST /generations.
+  # Batches monitoring logs and sends them to POST /logs.
   #
   # Nothing here ever blocks a provider call: #enqueue only appends and returns. A worker thread
   # sends on a size, byte or time trigger, at most 200 records and 4 MB per request (the server's
@@ -267,7 +267,7 @@ module PromptOn
     end
 
     def deliver(batch)
-      response = @http.post_generations(batch.map(&:record), environment: batch.first.environment)
+      response = @http.post_logs(batch.map(&:record), environment: batch.first.environment)
       handle(batch, response)
     rescue TransportError => e
       retry_later(batch, reason: e.message, retry_after: nil)

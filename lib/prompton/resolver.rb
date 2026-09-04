@@ -2,10 +2,10 @@
 
 require_relative "errors"
 require_relative "params"
-require_relative "resolution"
+require_relative "use_case_evidence"
 
 module PromptOn
-  # Local resolution: snapshot + use case key (+ prompt name) -> Resolution.
+  # Local use-case selection: use-case document + use case key (+ prompt name) -> use-case evidence.
   #
   # Two lookups, no rules: a deployment revision is a pin. The only selection axis at request
   # time is the prompt name; the environment decided which snapshot was fetched.
@@ -31,8 +31,8 @@ module PromptOn
       version = lookup(snapshot.prompt_versions, version_id, "missing_prompt_version", warnings)
       model = lookup(snapshot.models, deployment.model_id, "missing_model", warnings)
 
-      Resolution.new(
-        use_case: key, kind: use_case.kind, prompt: name, available_prompts: prompts,
+      UseCaseEvidence.new(
+        use_case: key, kind: use_case.kind, prompt: name, prompt_names: prompts,
         deployment_id: deployment.id, deployment_revision: deployment.revision,
         prompt_version_id: version&.id, prompt_version_number: version&.number,
         engine: version&.engine, model: model&.model_id, model_id: model&.id,

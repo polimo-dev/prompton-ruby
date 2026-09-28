@@ -10,7 +10,7 @@ module PromptOn
     attr_reader :use_case, :kind, :prompt, :prompt_names, :deployment_id,
                 :deployment_revision, :prompt_version_id, :prompt_version_number, :engine,
                 :model, :model_id, :provider, :params, :provider_options, :messages, :text,
-                :input_schema, :source, :etag, :payload_policy, :warnings
+                :input_schema, :source, :etag, :payload_policy, :api, :request_path, :tools, :warnings
 
     def initialize(**attributes)
       @use_case = attributes[:use_case]
@@ -33,6 +33,9 @@ module PromptOn
       @source = attributes[:source] || "remote"
       @etag = attributes[:etag]
       @payload_policy = attributes[:payload_policy]
+      @api = attributes[:api]
+      @request_path = attributes[:request_path]
+      @tools = attributes[:tools]
       @warnings = attributes[:warnings] || []
       freeze
     end
@@ -84,7 +87,7 @@ module PromptOn
         engine: engine, model: model, model_id: model_id, provider: provider, params: params,
         provider_options: provider_options, messages: @messages, text: @text,
         input_schema: input_schema, source: source, etag: etag, payload_policy: payload_policy,
-        warnings: warnings }
+        api: api, request_path: request_path, tools: tools, warnings: warnings }
     end
 
     def to_h
@@ -93,8 +96,8 @@ module PromptOn
         "model" => model, "model_id" => model_id, "provider" => provider,
         "params" => params, "provider_options" => provider_options,
         "prompt_version" => prompt_version_id && { "id" => prompt_version_id, "number" => prompt_version_number },
-        "messages" => @messages, "text" => @text, "source" => source,
-        "etag" => etag, "warnings" => warnings.map(&:to_s) }.compact
+        "messages" => @messages, "text" => @text, "api" => api, "request_path" => request_path,
+        "tools" => tools, "source" => source, "etag" => etag, "warnings" => warnings.map(&:to_s) }.compact
     end
   end
 end

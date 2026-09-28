@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+
+- Added schema-v7 use-case documents with chat tool definitions and message slots. Full provider chat messages, including `content: nil`, array content, `tool_calls`, `tool_call_id` and native extra fields, are preserved when slot histories are spliced.
+- Runtime evidence now carries deployment `api`, `request_path` and prompt `tools` metadata for provider request construction by applications.
+- Added `PromptOn.log_events` / `PromptOn::Client#log_events` for application-observed trace events. It posts `{"logs": [], "events": [...]}` to `/api/v1/logs?environment=...` and captures events in test mode.
+
 ## 0.2.0
 
 Breaking vocabulary cleanup for the schema-v4 use-case document contract.

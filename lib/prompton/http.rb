@@ -86,6 +86,14 @@ module PromptOn
       perform(request)
     end
 
+    # POST /logs?environment=… with trace events and no monitoring-log records.
+    def post_trace_events(events, environment:)
+      request = Net::HTTP::Post.new(request_uri("/logs", environment: environment))
+      request["Content-Type"] = "application/json"
+      request.body = JSON.generate({ "logs" => [], "events" => events })
+      perform(request)
+    end
+
     private
 
     def request_uri(path, query = {})

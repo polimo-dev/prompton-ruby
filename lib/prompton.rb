@@ -45,8 +45,8 @@ module PromptOn
   DELEGATED = %i[
     use_case prompt_names remote_use_case api_use_case
     use_case_document use_case_document_info use_case_document_status refresh refresh! export_use_case_document
-    log log_id flush log_stats
-    logged clear_logs put_use_case_document stub config
+    log log_events log_id flush log_stats
+    logged logged_events clear_logs put_use_case_document stub config
   ].freeze
 
   # Guards the default client so two threads racing on the first call cannot each build one,

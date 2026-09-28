@@ -20,7 +20,7 @@ module PromptOn
     def initialize(schema_version)
       @schema_version = schema_version
       super("use-case document schema version #{schema_version} is not supported " \
-            "(this SDK reads version #{UseCaseDocument::SCHEMA_VERSION})")
+            "(this SDK reads versions 4-#{UseCaseDocument::SCHEMA_VERSION})")
     end
 
     def code
@@ -35,13 +35,13 @@ module PromptOn
     end
   end
 
-  # The decoded `GET /use-cases` document (schema v4).
+  # The decoded `GET /use-cases`/`GET /prompts` document (schema v4-v7).
   #
   # A deployment revision is a pin, not a router: one revision is one model plus one pinned
   # prompt version per prompt name. v1 and v2 documents are refused.
   class UseCaseDocument
-    SCHEMA_VERSION = 4
-    KINDS = %w[chat text embedding].freeze
+    SCHEMA_VERSION = 7
+    KINDS = %w[chat decision text embedding].freeze
     ENGINES = %w[liquid raw].freeze
     PAYLOAD_MODES = %w[full hash none].freeze
 
@@ -50,10 +50,10 @@ module PromptOn
                          :deployment, keyword_init: true)
     # One pin: the model, its params and one prompt version per prompt name.
     Deployment = Struct.new(:id, :use_case_key, :revision, :model_id, :params, :provider_options,
-                            :prompt_pins, keyword_init: true)
+                            :prompt_pins, :api, :request_path, keyword_init: true)
     # One immutable prompt version.
     PromptVersion = Struct.new(:id, :prompt_id, :number, :engine, :messages, :text_template,
-                               keyword_init: true)
+                               :kind, :decision, :tools, keyword_init: true)
     # One catalog model.
     Model = Struct.new(:id, :provider, :model_id, :display_name, :metadata, :provider_options,
                        :capabilities, :pricing, :context_length, :status, keyword_init: true)
@@ -88,7 +88,7 @@ module PromptOn
       @prompt_versions = decode_by_id(document["prompt_versions"]) { |raw| decode_prompt_version(raw) }
       @models = decode_by_id(document["models"]) { |raw| decode_model(raw) }
       @deployments = decode_deployments(document["deployments"])
-      @use_cases = decode_use_cases(document["use_cases"])
+      @use_cases = decode_use_cases(document["use_cases"] || document["prompts"])
       freeze
     end
 
@@ -113,13 +113,13 @@ module PromptOn
       version = document["schema_version"]
       raise InvalidUseCaseDocumentError, "schema_version is required" if version.nil?
       raise InvalidUseCaseDocumentError, "schema_version must be an integer" unless version.is_a?(Integer)
-      return version if version == SCHEMA_VERSION
+      return version if [4, 5, 6, 7].include?(version)
 
       raise UnsupportedSchemaVersionError, version
     end
 
     def decode_use_cases(raw)
-      raise InvalidUseCaseDocumentError, "use_cases is required" unless raw.is_a?(Hash)
+      raise InvalidUseCaseDocumentError, "use_cases/prompts is required" unless raw.is_a?(Hash)
 
       raw.each_with_object({}) do |(key, value), acc|
         unless value.is_a?(Hash)
@@ -180,11 +180,13 @@ module PromptOn
         end
 
         acc[key] = Deployment.new(
-          id: string_or_nil(value["id"]), use_case_key: string_or_nil(value["use_case_key"]) || key,
+          id: string_or_nil(value["id"]),
+          use_case_key: string_or_nil(value["use_case_key"]) || string_or_nil(value["prompt_key"]) || key,
           revision: integer_or(value["revision"], nil), model_id: string_or_nil(value["model_id"]),
           params: Params.stringify_keys(value["params"]),
           provider_options: Params.stringify_keys(value["provider_options"]),
-          prompt_pins: decode_prompt_pins(value["prompt_pins"], key)
+          prompt_pins: decode_prompt_pins(value["prompt_pins"] || value["template_pins"], key),
+          api: string_or_nil(value["api"]), request_path: string_or_nil(value["request_path"])
         ).freeze
       end
     end
@@ -226,10 +228,14 @@ module PromptOn
 
     def decode_prompt_version(raw)
       PromptVersion.new(
-        id: string_or_nil(raw["id"]), prompt_id: string_or_nil(raw["prompt_id"]),
+        id: string_or_nil(raw["id"]),
+        prompt_id: string_or_nil(raw["prompt_id"]) || string_or_nil(raw["prompt_template_id"]),
         number: integer_or(raw["number"], nil),
         engine: enum(raw["engine"], ENGINES, "liquid", "unknown_engine"),
-        messages: decode_messages(raw["messages"]), text_template: string_or_nil(raw["text_template"])
+        messages: decode_messages(raw["messages"]), text_template: string_or_nil(raw["text_template"]),
+        kind: string_or_nil(raw["kind"]),
+        decision: raw["decision"].is_a?(Hash) ? Params.stringify_keys(raw["decision"]) : nil,
+        tools: decode_tools(raw["tools"])
       )
     end
 
@@ -239,9 +245,25 @@ module PromptOn
       raw.filter_map do |message|
         next unless message.is_a?(Hash)
 
-        message.merge("role" => string_or_nil(message["role"]),
-                      "content" => message["content"].is_a?(String) ? message["content"] : "").freeze
+        message.dup.freeze
       end
+    end
+
+    def decode_tools(raw)
+      return nil if raw.nil?
+
+      unless raw.is_a?(Hash) && raw["definitions"].is_a?(Array)
+        @warnings << Warning.new("invalid_tools", raw.class)
+        return nil
+      end
+
+      tools = { "definitions" => raw["definitions"].grep(Hash).map(&:dup) }
+      tools["tool_choice"] = raw["tool_choice"] if raw.key?("tool_choice")
+      if [true, false].include?(raw["parallel_tool_calls"])
+        tools["parallel_tool_calls"] =
+          raw["parallel_tool_calls"]
+      end
+      tools.freeze
     end
 
     def decode_model(raw)

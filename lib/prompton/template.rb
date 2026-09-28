@@ -74,10 +74,28 @@ module PromptOn
     # hashes. Other keys are preserved as they are.
     def render_messages(messages, variables, engine: "liquid")
       vars = normalize_variables(variables)
-      Array(messages).map do |message|
-        symbol_key = message.key?(:content) && !message.key?("content")
-        rendered = render((message["content"] || message[:content]).to_s, vars, engine: engine)
-        message.merge(symbol_key ? { content: rendered } : { "content" => rendered })
+      Array(messages).flat_map do |message|
+        if message["type"] == "slot" || message[:type] == "slot"
+          name = message["name"] || message[:name]
+          raise TemplateRenderError, "message slot requires a name" unless name.is_a?(String)
+          raise MissingVariableError, name unless vars.key?(name)
+
+          value = vars[name]
+          raise TemplateRenderError, "message slot #{name} must be a list" unless value.is_a?(Array)
+
+          value.map do |entry|
+            raise TemplateRenderError, "message slot #{name} must contain objects" unless entry.is_a?(Hash)
+
+            entry.dup
+          end
+        else
+          content = message.key?("content") ? message["content"] : message[:content]
+          next message.dup unless content.is_a?(String)
+
+          symbol_key = message.key?(:content) && !message.key?("content")
+          rendered = render(content, vars, engine: engine)
+          message.merge(symbol_key ? { content: rendered } : { "content" => rendered })
+        end
       end
     end
 

@@ -78,6 +78,7 @@ module PromptOn
       @use_case_prompt_client = UseCasePromptClient.new(@config, @http)
       @buffer = LogBuffer.new(@config, @http)
       @captured = []
+      @captured_events = []
       @capture_mutex = Mutex.new
       @stub_document = nil
       @discarded_logs = 0
@@ -191,6 +192,29 @@ module PromptOn
       prepared
     end
 
+    # Submits application-observed trace events immediately.
+    #
+    # The SDK never infers tool execution from model requests. Pass the tool/completion events
+    # your app observed; each event must already carry its stable event_id and trace_id.
+    def log_events(events, environment: nil)
+      prepared = prepare_trace_events(events)
+      if @config.test?
+        @capture_mutex.synchronize { @captured_events.concat(prepared) }
+        return { accepted: prepared.length, duplicates: 0, rejected: [] }
+      end
+      return { accepted: 0, duplicates: 0, rejected: [] } unless @config.remote?
+
+      response = @http.post_trace_events(prepared, environment: environment || @config.environment)
+      unless response.success?
+        raise ApiError.new(response.status, response.body,
+                           retry_after: response.retry_after_seconds)
+      end
+
+      { accepted: response.body.is_a?(Hash) ? response.body.fetch("accepted", 0).to_i : 0,
+        duplicates: response.body.is_a?(Hash) ? response.body.fetch("duplicates", 0).to_i : 0,
+        rejected: response.body.is_a?(Hash) && response.body["rejected"].is_a?(Array) ? response.body["rejected"] : [] }
+    end
+
     # Times a provider call, builds the record and enqueues it.
     #
     # The block's return value comes back unchanged. Return a PromptOn::Failure to record a
@@ -228,8 +252,16 @@ module PromptOn
       @capture_mutex.synchronize { @captured.dup }
     end
 
+    # The trace events captured in test mode, in order.
+    def logged_events
+      @capture_mutex.synchronize { @captured_events.dup }
+    end
+
     def clear_logs
-      @capture_mutex.synchronize { @captured.clear }
+      @capture_mutex.synchronize do
+        @captured.clear
+        @captured_events.clear
+      end
     end
 
     # Installs a use-case document directly: a Hash, a JSON string, or a path to a JSON file.
@@ -345,6 +377,20 @@ module PromptOn
       raise NotReadyError if entry.nil?
 
       entry
+    end
+
+    def prepare_trace_events(events)
+      raise InvalidRecordError, "events" unless events.is_a?(Array)
+      raise InvalidRecordError, "events" if events.length > 500
+
+      events.map do |event|
+        raise InvalidRecordError, "event" unless event.is_a?(Hash)
+
+        prepared = Params.deep_stringify(event)
+        prepared["sdk"] =
+          { "name" => SDK_NAME, "version" => VERSION }.merge(prepared["sdk"].is_a?(Hash) ? prepared["sdk"] : {})
+        prepared
+      end
     end
 
     def prepare_record(record, evidence)

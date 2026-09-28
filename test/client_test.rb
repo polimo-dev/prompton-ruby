@@ -299,7 +299,44 @@ class ClientTest < Minitest::Test
     assert_nil PromptOn.instance_variable_get(:@client)
   end
 
+  def test_log_events_captures_trace_events_in_test_mode
+    client = build_client(mode: :test)
+    event = trace_event
+
+    assert_equal({ accepted: 1, duplicates: 0, rejected: [] }, client.log_events([event]))
+
+    assert_equal [{ **event, "sdk" => { "name" => "prompton-ruby", "version" => PromptOn::VERSION } }],
+                 client.logged_events
+    client.clear_logs
+    assert_empty client.logged_events
+  end
+
+  def test_log_events_posts_to_logs_endpoint
+    server = PromptOnTest::StubServer.new do |request|
+      assert_equal "/api/v1/logs", request.path
+      assert_equal({ "environment" => "staging" }, request.query)
+      assert_equal({ "logs" => [],
+                     "events" => [{ **trace_event, "sdk" => { "name" => "prompton-ruby",
+                                                              "version" => PromptOn::VERSION } }] },
+                   request.json)
+      [202, { "Content-Type" => "application/json" }, { accepted: 1, duplicates: 0, rejected: [] }]
+    end
+    client = build_client(mode: :live, host: server.url, environment: "staging")
+
+    assert_equal({ accepted: 1, duplicates: 0, rejected: [] }, client.log_events([trace_event]))
+    assert_equal 1, server.request_count
+  ensure
+    server&.stop
+  end
+
   private
+
+  def trace_event
+    { "event_id" => "evt-1", "trace_id" => "trace-1", "event_kind" => "tool_attempt",
+      "status" => "ok", "observed_at" => "2026-09-28T00:00:00.000Z",
+      "tool_call_id" => "call-1", "tool_name" => "search", "arguments" => { "q" => "Ada" },
+      "result" => { "matches" => [] } }
+  end
 
   def record
     { "use_case" => "greeting", "model" => "openai/gpt-4o-mini", "status" => "ok",

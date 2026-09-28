@@ -323,6 +323,24 @@ and `prompt_names`), `MissingVariableError` (carries `variable`), `TemplateSynta
 (carries `status`, `code` and `details`), `TransportError`, `InvalidRecordError`,
 `ConfigurationError`.
 
+## Trace events
+
+Use `log_events` when your app has already observed tool calls or completion events and wants them available for eval evidence. The SDK does not execute tools and does not infer these events from provider requests. In live mode it immediately posts `{"logs": [], "events": [...]}` to the logs endpoint; in test mode the submitted events are available on `PromptOn.logged_events`.
+
+```ruby
+PromptOn.log_events([{
+  "event_id" => "evt_1",
+  "trace_id" => "trace_1",
+  "event_kind" => "tool_attempt",
+  "status" => "ok",
+  "observed_at" => Time.now.utc.iso8601(6),
+  "tool_call_id" => "call_1",
+  "tool_name" => "search_diary",
+  "arguments" => { "query" => "Ada" },
+  "result" => { "matches" => [] }
+}])
+```
+
 ## Development
 
 ```

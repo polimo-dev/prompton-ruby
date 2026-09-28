@@ -78,8 +78,8 @@ class ResolverTest < Minitest::Test
                  resolution.warnings.map(&:to_s)
   end
 
-  def test_schema_version_must_be_exactly_four
-    [3, 5].each do |version|
+  def test_schema_version_accepts_current_and_legacy_supported_versions
+    [3, 8].each do |version|
       error = assert_raises(PromptOn::UnsupportedSchemaVersionError) do
         PromptOn::UseCaseDocument.from_hash(snapshot_document.merge("schema_version" => version))
       end
@@ -91,9 +91,11 @@ class ResolverTest < Minitest::Test
     legacy = snapshot_document.except("schema_version").merge("version" => 4)
     assert_raises(PromptOn::InvalidUseCaseDocumentError) { PromptOn::UseCaseDocument.from_hash(legacy) }
 
-    data = PromptOn::UseCaseDocument.from_hash(snapshot_document.merge("schema_version" => 4))
-    assert_equal 4, data.schema_version
-    assert_equal "openai/gpt-4o-mini", PromptOn::Resolver.resolve(data, "greeting").model
+    [4, 5, 6, 7].each do |version|
+      data = PromptOn::UseCaseDocument.from_hash(snapshot_document.merge("schema_version" => version))
+      assert_equal version, data.schema_version
+      assert_equal "openai/gpt-4o-mini", PromptOn::Resolver.resolve(data, "greeting").model
+    end
   end
 
   def test_prompt_names_lists_what_resolve_accepts

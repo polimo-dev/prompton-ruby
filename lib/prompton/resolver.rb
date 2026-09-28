@@ -31,18 +31,21 @@ module PromptOn
       version = lookup(snapshot.prompt_versions, version_id, "missing_prompt_version", warnings)
       model = lookup(snapshot.models, deployment.model_id, "missing_model", warnings)
 
+      runtime_kind = version&.kind || use_case.kind
+
       UseCaseEvidence.new(
-        use_case: key, kind: use_case.kind, prompt: name, prompt_names: prompts,
+        use_case: key, kind: runtime_kind, prompt: name, prompt_names: prompts,
         deployment_id: deployment.id, deployment_revision: deployment.revision,
         prompt_version_id: version&.id, prompt_version_number: version&.number,
         engine: version&.engine, model: model&.model_id, model_id: model&.id,
         provider: model&.provider,
         params: Params.merge(use_case.default_params, deployment.params),
         provider_options: Params.merge(model&.provider_options, deployment.provider_options),
-        messages: use_case.kind == "chat" ? version&.messages : nil,
-        text: use_case.kind == "text" ? version&.text_template : nil,
+        messages: runtime_kind == "chat" ? version&.messages : nil,
+        text: runtime_kind == "text" ? version&.text_template : nil,
         input_schema: use_case.input_schema, source: source.to_s, etag: etag,
-        payload_policy: use_case.payload_policy, warnings: warnings
+        payload_policy: use_case.payload_policy, api: deployment.api, request_path: deployment.request_path,
+        tools: runtime_kind == "chat" ? version&.tools : nil, warnings: warnings
       )
     end
 

@@ -24,7 +24,7 @@ class ClientTest < Minitest::Test
     resolution.track(variables: { name: "Ada" }) { "hello" }
 
     assert_equal 1, client.logged.length
-    assert_equal "greeting", client.logged.first["use_case"]
+    assert_equal "greeting", client.logged.first["prompt_key"]
     assert_equal "hello", client.logged.first.dig("output", "content")
     assert_equal({ captured: 1 }, client.flush)
   end
@@ -98,7 +98,7 @@ class ClientTest < Minitest::Test
     client = build_client(mode: :test)
 
     error = assert_raises(PromptOn::InvalidRecordError) { client.log("model" => "m", "status" => "ok") }
-    assert_equal "use_case", error.field
+    assert_equal "prompt_key", error.field
     assert_raises(PromptOn::InvalidRecordError) { client.log("use_case" => "greeting", "status" => "ok") }
 
     # started_at is never guessed: a record for a provider call that ran minutes ago would otherwise
@@ -117,8 +117,8 @@ class ClientTest < Minitest::Test
     logged = client.log({ "status" => "ok", "started_at" => Time.now.utc.iso8601(6) },
                         use_case_evidence: resolution)
 
-    assert_equal "greeting", logged["use_case"]
-    assert_equal "ko", logged["prompt"]
+    assert_equal "greeting", logged["prompt_key"]
+    assert_equal "ko", logged["template"]
     assert_equal 3, logged["deployment_revision"]
     assert_equal "0198f2a1-0000-7000-8000-00000000a002", logged["prompt_version_id"]
     assert_equal "manual", logged["source"]
@@ -197,7 +197,7 @@ class ClientTest < Minitest::Test
     use_case.track(variables: { name: "Ada" }, input_messages: messages) { { content: "안녕" } }
 
     logged = client.logged.first
-    assert_equal "ko", logged["prompt"]
+    assert_equal "ko", logged["template"]
     assert_equal "0198f2a1-0000-7000-8000-00000000a002", logged["prompt_version_id"]
     assert_equal "Ada님에게 인사해줘.", logged.dig("input", "messages").last["content"]
   end
@@ -319,11 +319,13 @@ class ClientTest < Minitest::Test
                      "events" => [{ **trace_event, "sdk" => { "name" => "prompton-ruby",
                                                               "version" => PromptOn::VERSION } }] },
                    request.json)
-      [202, { "Content-Type" => "application/json" }, { accepted: 1, duplicates: 0, rejected: [] }]
+      [202, { "Content-Type" => "application/json" },
+       { accepted: 1, duplicates: 0, rejected: [],
+         events: { accepted: 2, duplicates: 0, rejected: [] } }]
     end
     client = build_client(mode: :live, host: server.url, environment: "staging")
 
-    assert_equal({ accepted: 1, duplicates: 0, rejected: [] }, client.log_events([trace_event]))
+    assert_equal({ accepted: 2, duplicates: 0, rejected: [] }, client.log_events([trace_event]))
     assert_equal 1, server.request_count
   ensure
     server&.stop
@@ -339,7 +341,7 @@ class ClientTest < Minitest::Test
   end
 
   def record
-    { "use_case" => "greeting", "model" => "openai/gpt-4o-mini", "status" => "ok",
+    { "prompt_key" => "greeting", "model" => "openai/gpt-4o-mini", "status" => "ok",
       "started_at" => Time.now.utc.iso8601(6) }
   end
 

@@ -60,7 +60,7 @@ module PromptOn
 
       record = {
         "id" => id,
-        "use_case" => evidence&.use_case || meta[:use_case],
+        "prompt_key" => evidence&.use_case || meta[:prompt_key] || meta[:use_case],
         "kind" => evidence&.kind || meta[:kind],
         "model" => result[:model] || evidence&.model || meta[:model],
         "model_id" => evidence&.model_id,
@@ -69,7 +69,7 @@ module PromptOn
         "upstream_provider" => result[:upstream_provider],
         "deployment_id" => evidence&.deployment_id,
         "deployment_revision" => evidence&.deployment_revision,
-        "prompt" => evidence&.prompt,
+        "template" => evidence&.prompt,
         "prompt_version_id" => evidence&.prompt_version_id,
         "source" => evidence&.source,
         "status" => status,

@@ -7,7 +7,7 @@ require_relative "test_helper"
 #   PTN_HOST=http://localhost:4000 PTN_API_KEY=ptn_yourproject_… bundle exec rake test
 #
 # It asserts the two things a unit test cannot: that the use-case document this SDK fetches and reads
-# locally agrees with the server's own POST /use-cases/{key}/prompt, and that the monitoring logs it
+# locally agrees with the server's own POST /prompts/{key}/render, and that the monitoring logs it
 # builds are accepted by the ingest endpoint.
 class IntegrationTest < Minitest::Test
   def setup
@@ -91,10 +91,12 @@ class IntegrationTest < Minitest::Test
     assert_equal 404, @http.post_resolve("does_not_exist", {}).status
 
     error = assert_raises(PromptOn::UnknownPromptError) { @client.use_case("greeting", prompt: "fr") }
-    remote = @http.post_resolve("greeting", { "prompt" => "fr" })
+    remote = @http.post_resolve("greeting", { "template" => "fr" })
     assert_equal 404, remote.status
     assert_equal "unknown_prompt", remote.body.dig("error", "details", "reason")
-    assert_equal remote.body.dig("error", "details", "prompt_names"), error.prompt_names
+    remote_names = remote.body.dig("error", "details", "template_names") ||
+                   remote.body.dig("error", "details", "prompt_names")
+    assert_equal remote_names, error.prompt_names
 
     missing = assert_raises(PromptOn::MissingVariableError) { @client.use_case("greeting").messages({}) }
     remote = @http.post_resolve("greeting", { "variables" => {} })
@@ -171,17 +173,17 @@ class IntegrationTest < Minitest::Test
     local = @client.use_case(use_case, prompt: prompt)
     assert_instance_of PromptOn::UseCaseDocument, @client.use_case_document
 
-    payload = { "use_case" => use_case, "environment" => "production" }
-    payload["prompt"] = prompt if prompt
+    payload = { "prompt_key" => use_case, "environment" => "production" }
+    payload["template"] = prompt if prompt
     payload["variables"] = variables if variables
-    remote = @http.post_resolve(use_case, payload.except("use_case"))
+    remote = @http.post_resolve(use_case, payload.except("prompt_key"))
 
     assert_equal 200, remote.status, remote.body.inspect
     agree(remote.body["kind"], local.kind, "kind")
     agree(remote.body.dig("deployment", "id"), local.deployment_id, "deployment id")
     agree(remote.body.dig("deployment", "revision"), local.deployment_revision, "revision")
-    agree(remote.body["prompt"], local.prompt, "prompt")
-    agree(remote.body["prompt_names"], local.prompt_names, "prompt_names")
+    agree remote.body["template"] || remote.body["prompt"], local.prompt, "prompt"
+    agree remote.body["template_names"] || remote.body["prompt_names"], local.prompt_names, "prompt_names"
     agree(remote.body["model"], local.model, "model")
     agree(remote.body["model_id"], local.model_id, "model_id")
     agree(remote.body["provider"], local.provider, "provider")
@@ -212,7 +214,7 @@ class IntegrationTest < Minitest::Test
   end
 
   def log_record
-    { "id" => PromptOn::UuidV7.generate, "use_case" => "greeting", "kind" => "chat",
+    { "id" => PromptOn::UuidV7.generate, "prompt_key" => "greeting", "kind" => "chat",
       "model" => "openai/gpt-4o-mini", "provider" => "openrouter", "status" => "ok",
       "started_at" => Time.now.utc.iso8601(6), "finish_reason" => "stop", "stop_kind" => "stop",
       "latency_ms" => 842, "source" => "remote",

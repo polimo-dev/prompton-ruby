@@ -7,8 +7,8 @@ require_relative "test_helper"
 # to, or how a monitoring log is truncated, an app that talks to PromptOn from two languages gets
 # two different answers. That is what these files prevent.
 class ConformanceTest < Minitest::Test
-  FILES = %w[template.json use_case.json truncation.json stop_kind.json log_record.json].freeze
-  REQUIRED_RECORD_FIELDS = %w[id use_case model status started_at].freeze
+  FILES = %w[template.json prompt.json truncation.json stop_kind.json log_record.json].freeze
+  REQUIRED_RECORD_FIELDS = %w[id prompt_key model status started_at].freeze
   ERROR_KINDS = %w[http_4xx http_5xx rate_limited timeout transport parse app].freeze
   KINDS = %w[chat text embedding].freeze
   PROVIDERS = %w[openrouter groq openai anthropic google other].freeze
@@ -74,15 +74,15 @@ class ConformanceTest < Minitest::Test
   # --- use_case.json --------------------------------------------------------
 
   def test_every_conformance_document_decodes_as_schema_v4
-    conformance("use_case.json")["documents"].each do |reference, raw|
+    conformance("prompt.json")["documents"].each do |reference, raw|
       data = PromptOn::UseCaseDocument.from_hash(raw)
       assert_includes [4, 5, 6, PromptOn::UseCaseDocument::SCHEMA_VERSION], data.schema_version, reference
     end
   end
 
   def test_resolve_cases
-    document = conformance("use_case.json")
-    assert_equal document["default_prompt"], PromptOn::Resolver::DEFAULT_PROMPT
+    document = conformance("prompt.json")
+    assert_equal (document["default_template"] || document["default_prompt"]), PromptOn::Resolver::DEFAULT_PROMPT
 
     snapshots = document["documents"].transform_values { |raw| PromptOn::UseCaseDocument.from_hash(raw) }
 
@@ -158,7 +158,7 @@ class ConformanceTest < Minitest::Test
       assert_equal "7", record["id"][14], "#{name}: id must be a UUIDv7, not a v4"
       assert_includes %w[ok error], record["status"], "#{name}: status"
       assert Time.iso8601(record["started_at"]), "#{name}: started_at"
-      assert_operator record["use_case"].bytesize, :<=, 512, "#{name}: use_case"
+      assert_operator record["prompt_key"].bytesize, :<=, 512, "#{name}: prompt_key"
 
       assert_optional_enum(record["kind"], KINDS, "#{name}: kind")
       assert_optional_enum(record["provider"], PROVIDERS, "#{name}: provider")
@@ -228,11 +228,13 @@ class ConformanceTest < Minitest::Test
   end
 
   def resolve_expectation(data, kase)
-    resolution = PromptOn::Resolver.resolve(data, kase["use_case"], prompt: kase["prompt"])
+    resolution = PromptOn::Resolver.resolve(
+      data, kase["prompt_key"] || kase["use_case"], prompt: kase["template"] || kase["prompt"]
+    )
     expectation = {
       "key" => resolution.use_case, "kind" => resolution.kind, "deployment_id" => resolution.deployment_id,
-      "revision" => resolution.deployment_revision, "prompt" => resolution.prompt,
-      "prompt_names" => resolution.prompt_names, "model_id" => resolution.model_id,
+      "revision" => resolution.deployment_revision, "template" => resolution.prompt,
+      "template_names" => resolution.prompt_names, "model_id" => resolution.model_id,
       "model" => resolution.model, "provider" => resolution.provider,
       "params" => resolution.params,
       "provider_options" => resolution.provider_options,
@@ -243,9 +245,9 @@ class ConformanceTest < Minitest::Test
     }
     expectation.merge(rendered(resolution, kase["variables"]))
   rescue PromptOn::UnknownPromptError => e
-    { "error" => "unknown_prompt", "key" => e.use_case, "prompt" => e.prompt, "prompt_names" => e.prompt_names }
+    { "error" => "unknown_template", "key" => e.use_case, "template" => e.prompt, "template_names" => e.prompt_names }
   rescue PromptOn::UnknownUseCaseError => e
-    { "error" => "unknown_use_case", "key" => e.use_case }
+    { "error" => "unknown_prompt", "key" => e.use_case }
   rescue PromptOn::MissingVariableError => e
     { "error" => "missing_variable", "variable" => e.variable }
   rescue PromptOn::Error => e
@@ -255,7 +257,7 @@ class ConformanceTest < Minitest::Test
   def rendered(resolution, variables)
     if resolution.kind == "chat" && resolution.messages
       messages = variables ? resolution.render(variables) : resolution.messages
-      { "messages" => messages.map { |m| { "role" => m["role"], "content" => m["content"] } } }
+      { "messages" => messages }
     elsif resolution.kind == "text" && resolution.text
       { "text" => variables ? resolution.render(variables) : resolution.text }
     else

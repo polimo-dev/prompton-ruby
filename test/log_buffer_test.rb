@@ -234,7 +234,7 @@ class LogBufferTest < Minitest::Test
   end
 
   def record(index)
-    { "id" => PromptOn::UuidV7.generate, "use_case" => "greeting", "model" => "openai/gpt-4o-mini",
+    { "id" => PromptOn::UuidV7.generate, "prompt_key" => "greeting", "model" => "openai/gpt-4o-mini",
       "status" => "ok", "started_at" => Time.now.utc.iso8601(6), "trace_id" => index.to_s }
   end
 

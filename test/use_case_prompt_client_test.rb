@@ -2,7 +2,7 @@
 
 require_relative "test_helper"
 
-# POST /use-cases/:key/prompt is the simple path and the smoke test. It follows the same rules as
+# POST /prompts/:key/render is the simple path and the smoke test. It follows the same rules as
 # the document store: cache the answer, and serve the cached one when PromptOn says 429 or 5xx.
 class UseCasePromptClientTest < Minitest::Test
   def setup
@@ -106,7 +106,7 @@ class UseCasePromptClientTest < Minitest::Test
 
     @body = { "error" => { "code" => "not_found", "message" => "no such prompt",
                            "details" => { "key" => "greeting", "reason" => "unknown_prompt",
-                                          "prompt" => "fr", "prompt_names" => %w[default ko] } } }
+                                          "template" => "fr", "template_names" => %w[default ko] } } }
     error = assert_raises(PromptOn::UnknownPromptError) { client.remote_use_case("greeting", prompt: "fr") }
     assert_equal %w[default ko], error.prompt_names
 
@@ -133,7 +133,8 @@ class UseCasePromptClientTest < Minitest::Test
                                           **overrides))
   end
 
-  def respond(_request)
+  def respond(request)
+    assert_match %r{\A/api/v1/prompts/[^/]+/render\z}, request.path
     return [200, { "content-type" => "application/json" }, @body] if @status == 200
 
     [@status, { "content-type" => "application/json" }, @body.is_a?(Hash) ? @body : { "error" => {} }]
@@ -142,7 +143,7 @@ class UseCasePromptClientTest < Minitest::Test
   def resolve_body
     { "key" => "greeting", "kind" => "chat",
       "deployment" => { "id" => "0198f2a1-0000-7000-8000-00000000d001", "revision" => 3 },
-      "prompt" => "default", "prompt_names" => %w[default ko],
+      "template" => "default", "template_names" => %w[default ko],
       "model_id" => "0198f2a1-0000-7000-8000-00000000e001", "model" => "openai/gpt-4o-mini",
       "provider" => "openrouter", "params" => { "temperature" => 0.2 },
       "provider_options" => { "only" => ["OpenAI"] },

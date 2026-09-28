@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "json"
 require_relative "test_helper"
 
 class ToolPromptSchemaTest < Minitest::Test
@@ -58,5 +59,23 @@ class ToolPromptSchemaTest < Minitest::Test
     assert_nil messages[2]["content"]
     assert_equal "call_1", messages[2]["tool_calls"][0]["id"]
     assert_equal [{ "type" => "text", "text" => "ok" }], messages[3]["content"]
+  end
+
+  def test_preview_http_contract_preserves_native_history_and_tools
+    fixture = JSON.parse(File.read(File.join(__dir__, "conformance", "http_contract.json")))
+    document = PromptOn::UseCaseDocument.from_hash(fixture["snapshot"])
+    evidence = PromptOn::Resolver.resolve(document, fixture["render"]["key"])
+
+    messages = PromptOn::Template.render_messages(
+      evidence.messages,
+      { "locale" => "ko-KR", "topic" => "park walks",
+        "history" => fixture["render"]["request"]["body"]["messages"][1, 3] },
+      engine: evidence.engine
+    )
+
+    assert_equal fixture["render"]["request"]["body"]["messages"], messages
+    assert_equal "auto", evidence.tools["tool_choice"]
+    refute evidence.tools["parallel_tool_calls"]
+    assert_equal "object", evidence.tools["definitions"].first["output_schema"]["type"]
   end
 end

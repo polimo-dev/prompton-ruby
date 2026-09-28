@@ -57,10 +57,10 @@ module PromptOn
       @uri = URI.parse(config.api_url)
     end
 
-    # GET /use-cases?environment=… with If-None-Match. The body is left as raw bytes: the ETag is
+    # GET /prompts?environment=… with If-None-Match. The body is left as raw bytes: the ETag is
     # a hash of them, so the disk cache stores exactly what the server sent.
     def get_snapshot(environment:, etag: nil, read_timeout: nil)
-      request = Net::HTTP::Get.new(request_uri("/use-cases", environment: environment))
+      request = Net::HTTP::Get.new(request_uri("/prompts", environment: environment))
       request["If-None-Match"] = etag if etag
       response = perform(request, read_timeout: read_timeout, parse_json: false)
       return response if response.success?
@@ -70,9 +70,9 @@ module PromptOn
       Response.new(status: response.status, headers: response.headers, body: parse(response.body))
     end
 
-    # POST /use-cases/{key}/prompt — the simple path and the smoke test.
+    # POST /prompts/{key}/render — the simple path and the smoke test.
     def post_resolve(use_case, payload)
-      request = Net::HTTP::Post.new(request_uri("/use-cases/#{URI.encode_www_form_component(use_case)}/prompt"))
+      request = Net::HTTP::Post.new(request_uri("/prompts/#{URI.encode_www_form_component(use_case)}/render"))
       request["Content-Type"] = "application/json"
       request.body = JSON.generate(payload)
       perform(request)

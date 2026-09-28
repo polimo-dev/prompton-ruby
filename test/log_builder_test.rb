@@ -15,7 +15,7 @@ class LogBuilderTest < Minitest::Test
                      usage: { input_tokens: 38, output_tokens: 9, raw: { "total_tokens" => 47 } }
                    })
 
-    assert_equal "greeting", record["use_case"]
+    assert_equal "greeting", record["prompt_key"]
     assert_equal "chat", record["kind"]
     assert_equal "openai/gpt-4o-mini", record["model"]
     assert_equal "0198f2a1-0000-7000-8000-00000000e001", record["model_id"]
@@ -23,7 +23,7 @@ class LogBuilderTest < Minitest::Test
     assert_equal "OpenAI", record["upstream_provider"]
     assert_equal "0198f2a1-0000-7000-8000-00000000d001", record["deployment_id"]
     assert_equal 3, record["deployment_revision"]
-    assert_equal "default", record["prompt"]
+    assert_equal "default", record["template"]
     assert_equal "0198f2a1-0000-7000-8000-00000000a001", record["prompt_version_id"]
     assert_equal "remote", record["source"]
     assert_equal "stop", record["stop_kind"]

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1
+
+- Fixed runtime compatibility with the current PromptOn prompt API: snapshot fetches now use `GET /api/v1/prompts`, remote render uses `POST /api/v1/prompts/{key}/render` with `template`, and monitoring logs use canonical `prompt_key`/`template` fields.
+- Updated active conformance fixtures to the schema7 prompt contract with native tool messages while keeping existing public use-case aliases.
+
 ## 0.4.0
 
 - Added schema-v7 use-case documents with chat tool definitions and message slots. Full provider chat messages, including `content: nil`, array content, `tool_calls`, `tool_call_id` and native extra fields, are preserved when slot histories are spliced.

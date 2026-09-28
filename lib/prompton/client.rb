@@ -32,7 +32,7 @@ module PromptOn
   # Clients are safe to share between threads and hold background threads of their own; call
   # #close when you are done with one.
   class Client
-    REQUIRED_RECORD_FIELDS = %w[use_case model status started_at].freeze
+    REQUIRED_RECORD_FIELDS = %w[prompt_key model status started_at].freeze
 
     # Ruby cannot unregister an at_exit block, so there is exactly one for the whole process and
     # it drains a registry of clients held weakly: a client that goes out of scope is collected
@@ -210,9 +210,14 @@ module PromptOn
                            retry_after: response.retry_after_seconds)
       end
 
-      { accepted: response.body.is_a?(Hash) ? response.body.fetch("accepted", 0).to_i : 0,
-        duplicates: response.body.is_a?(Hash) ? response.body.fetch("duplicates", 0).to_i : 0,
-        rejected: response.body.is_a?(Hash) && response.body["rejected"].is_a?(Array) ? response.body["rejected"] : [] }
+      counters = if response.body.is_a?(Hash) && response.body["events"].is_a?(Hash)
+                   response.body["events"]
+                 else
+                   response.body
+                 end
+      { accepted: counters.is_a?(Hash) ? counters.fetch("accepted", 0).to_i : 0,
+        duplicates: counters.is_a?(Hash) ? counters.fetch("duplicates", 0).to_i : 0,
+        rejected: counters.is_a?(Hash) && counters["rejected"].is_a?(Array) ? counters["rejected"] : [] }
     end
 
     # Times a provider call, builds the record and enqueues it.
@@ -395,6 +400,8 @@ module PromptOn
 
     def prepare_record(record, evidence)
       prepared = Params.deep_stringify(record)
+      prepared["prompt_key"] ||= prepared["use_case"] if prepared["use_case"]
+      prepared["template"] ||= prepared["prompt"] if prepared["prompt"]
       prepared["id"] ||= UuidV7.generate
       prepared["sdk"] ||= { "name" => SDK_NAME, "version" => VERSION }
       merge_use_case(prepared, evidence) if evidence
@@ -407,10 +414,10 @@ module PromptOn
     end
 
     def merge_use_case(record, evidence)
-      { "use_case" => evidence.use_case, "kind" => evidence.kind, "model" => evidence.model,
+      { "prompt_key" => evidence.use_case, "kind" => evidence.kind, "model" => evidence.model,
         "model_id" => evidence.model_id, "provider" => evidence.provider,
         "deployment_id" => evidence.deployment_id,
-        "deployment_revision" => evidence.deployment_revision, "prompt" => evidence.prompt,
+        "deployment_revision" => evidence.deployment_revision, "template" => evidence.prompt,
         "prompt_version_id" => evidence.prompt_version_id,
         "source" => evidence.source }.each do |key, value|
         record[key] = value if record[key].nil? && !value.nil?
@@ -424,7 +431,7 @@ module PromptOn
     def policy_for(record, evidence)
       return evidence.payload_policy if evidence&.payload_policy
 
-      use_case_document&.use_case(record["use_case"])&.payload_policy
+      use_case_document&.use_case(record["prompt_key"] || record["use_case"])&.payload_policy
     end
 
     def unwrap_evidence(value)

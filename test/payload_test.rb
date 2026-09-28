@@ -43,7 +43,7 @@ class PayloadTest < Minitest::Test
 
     refute result.key?("input")
     refute result.key?("output")
-    assert_equal "greeting", result["use_case"]
+    assert_equal "greeting", result["prompt_key"]
   end
 
   def test_error_messages_are_capped_at_2048_bytes_whatever_max_bytes_says
@@ -105,7 +105,7 @@ class PayloadTest < Minitest::Test
   private
 
   def record(id: "0198f2a1-0000-7000-8000-000000001001", status: "ok", **extra)
-    { "id" => id, "use_case" => "greeting", "model" => "openai/gpt-4o-mini", "status" => status,
+    { "id" => id, "prompt_key" => "greeting", "model" => "openai/gpt-4o-mini", "status" => status,
       "started_at" => "2026-09-04T09:00:00.000000Z",
       "input" => { "messages" => [{ "role" => "user", "content" => "hi" }] },
       "output" => { "content" => "hello" } }.merge(extra)

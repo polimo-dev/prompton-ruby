@@ -4,7 +4,7 @@ require_relative "errors"
 require_relative "use_case_evidence"
 
 module PromptOn
-  # The POST /use-cases/{key}/prompt path: the simple way in, and the smoke test.
+  # The POST /prompts/{key}/render path: the simple way in, and the smoke test.
   #
   # It follows the same resilience rules as the use-case document store. A response fetched without
   # variables is cached for the cache TTL per (use case, prompt, environment) and rendered
@@ -36,7 +36,7 @@ module PromptOn
       evidence.with_rendered(evidence.render(variables))
     end
 
-    # The raw POST /use-cases/{key}/prompt response body.
+    # The raw POST /prompts/{key}/render response body.
     #
     # Passing +variables+ asks the server to render, which is the smoke-test path and is never
     # cached. Without them the response is cached for the cache TTL.
@@ -46,7 +46,7 @@ module PromptOn
       return cached if cached
 
       payload = { "environment" => environment || @config.environment }
-      payload["prompt"] = prompt.to_s if prompt
+      payload["template"] = prompt.to_s if prompt
       payload["variables"] = variables if variables
 
       begin
@@ -92,9 +92,9 @@ module PromptOn
       when 404
         case details["reason"]
         when "unresolved" then return UnresolvedError.new(key)
-        when "unknown_prompt"
-          return UnknownPromptError.new(key, details["prompt"].to_s,
-                                        details["prompt_names"] || [])
+        when "unknown_prompt", "unknown_template"
+          return UnknownPromptError.new(key, (details["template"] || details["prompt"]).to_s,
+                                        details["template_names"] || details["prompt_names"] || [])
         end
         return UnknownUseCaseError.new(key) if details["key"]
       end
@@ -107,8 +107,8 @@ module PromptOn
       version = body["prompt_version"] || {}
 
       UseCaseEvidence.new(
-        use_case: body["key"] || requested_key, kind: body["kind"], prompt: body["prompt"],
-        prompt_names: body["prompt_names"] || [],
+        use_case: body["key"] || requested_key, kind: body["kind"], prompt: body["template"] || body["prompt"],
+        prompt_names: body["template_names"] || body["prompt_names"] || [],
         deployment_id: deployment["id"], deployment_revision: deployment["revision"],
         prompt_version_id: version["id"], prompt_version_number: version["number"],
         engine: body["engine"] || "liquid", model: body["model"], model_id: body["model_id"],

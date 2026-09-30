@@ -19,6 +19,22 @@ module PromptOnTest
 
   # A logger that keeps its lines instead of printing them, so a test can assert on the one line
   # the SDK promises to emit.
+
+  class FakeClock
+    def initialize(start = 1000.0)
+      @value = start
+      @mutex = Mutex.new
+    end
+
+    def call
+      @mutex.synchronize { @value }
+    end
+
+    def advance(seconds)
+      @mutex.synchronize { @value += seconds }
+    end
+  end
+
   class MemoryLogger
     attr_reader :lines
 

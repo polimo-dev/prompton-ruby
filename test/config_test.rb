@@ -20,6 +20,7 @@ class ConfigTest < Minitest::Test
     assert_equal "production", config.environment
     assert_nil config.api_key
     assert_in_delta 10.0, config.cache_ttl
+    assert_in_delta 1.0, config.config_fetch_timeout
     assert_equal "prompton-ruby/#{PromptOn::VERSION}", config.user_agent
     refute_predicate config, :remote?
   end
@@ -73,9 +74,17 @@ class ConfigTest < Minitest::Test
     refute_predicate PromptOn::Config.new(api_key: "ptn_x_y", mode: :test), :remote?
   end
 
+  def test_legacy_config_fetch_timing_options_are_ignored
+    config = PromptOn::Config.new(cache_ttl: 0.01, config_fetch_timeout: 0.01)
+
+    assert_in_delta 10.0, config.cache_ttl
+    assert_in_delta 1.0, config.config_fetch_timeout
+    assert_in_delta 0.01, config.prompt_cache_ttl
+    assert_in_delta 10.0, PromptOn::Config.new(cache_ttl: 0).cache_ttl
+  end
+
   def test_invalid_options_are_refused_at_construction
     assert_raises(PromptOn::ConfigurationError) { PromptOn::Config.new(mode: :sideways) }
-    assert_raises(PromptOn::ConfigurationError) { PromptOn::Config.new(cache_ttl: 0) }
     assert_raises(PromptOn::ConfigurationError) { PromptOn::Config.new(flush_size: 1.5) }
     assert_raises(PromptOn::ConfigurationError) { PromptOn::Config.new(redact: "not callable") }
   end

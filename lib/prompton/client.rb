@@ -71,10 +71,11 @@ module PromptOn
     attr_reader :config
 
     def initialize(config = nil, **options)
+      clock = options.delete(:_clock)
       @config = config || Config.new(**options)
       @http = Http.new(@config)
       @store = SnapshotStore.new(@config)
-      @poller = SnapshotPoller.new(@config, @store, @http)
+      @poller = SnapshotPoller.new(@config, @store, @http, clock: clock)
       @use_case_prompt_client = UseCasePromptClient.new(@config, @http)
       @buffer = LogBuffer.new(@config, @http)
       @captured = []
@@ -101,14 +102,13 @@ module PromptOn
     # Raises PromptOn::UnknownUseCaseError, PromptOn::UnresolvedError,
     # PromptOn::UnknownPromptError, or PromptOn::NotReadyError when no tier has a document.
     def use_case(use_case, prompt: nil)
-      entry = current_entry
-      @poller.ensure_fresh
+      entry = current_entry(use_case)
       UseCase.new(self, Resolver.resolve(entry.data, use_case, prompt: prompt, source: entry.source, etag: entry.etag))
     end
 
     # The prompt names the live deployment pins for a use case, sorted.
     def prompt_names(use_case)
-      Resolver.prompt_names(current_entry.data, use_case)
+      Resolver.prompt_names(current_entry(use_case).data, use_case)
     end
 
     # Selects through the prompt endpoint instead of the document. The simple path and the smoke test.
@@ -141,18 +141,18 @@ module PromptOn
 
     # Poll state: the last attempt, the consecutive failure count and how long the backoff or
     # Retry-After window still has to run.
-    def use_case_document_status
-      @poller.status
+    def use_case_document_status(use_case = nil)
+      @poller.status(use_case)
     end
 
     # Fetches once, now, in the calling thread. Returns true on success; never raises.
-    def refresh
-      @poller.refresh
+    def refresh(use_case = nil)
+      @poller.refresh(use_case)
     end
 
     # Fetches once, now, in the calling thread, and raises when it fails.
-    def refresh!
-      @poller.refresh!
+    def refresh!(use_case = nil)
+      @poller.refresh!(use_case)
     end
 
     # Writes the current document to +path+ (plus a sidecar with its ETag) so it can be committed
@@ -376,12 +376,13 @@ module PromptOn
       nil
     end
 
-    def current_entry
-      entry = @store.entry || @store.load_local
-      entry ||= @store.entry if @poller.ensure_document
-      raise NotReadyError if entry.nil?
+    def current_entry(use_case)
+      @store.load_local if @store.entry.nil?
+      @poller.ensure_prompt(use_case)
+      prompt_entry = @store.prompt_entry(use_case)
+      raise NotReadyError if prompt_entry.nil?
 
-      entry
+      prompt_entry
     end
 
     def prepare_trace_events(events)

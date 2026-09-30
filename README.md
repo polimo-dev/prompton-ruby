@@ -44,10 +44,12 @@ use_case.track(variables: { name: "Ada" }, input_messages: messages) do
 end
 ```
 
-`use_case` reads memory, not the network. `track` times the block, builds the monitoring
-log and queues it; it returns whatever your block returned, and re-raises whatever your block
-raised. There is a runnable version in [`examples/greeting.rb`](examples/greeting.rb), which works
-with no server at all because it ships a bundled use-case document.
+`use_case` uses the in-memory config when it is fresh. If that prompt key has no fresh remote
+config, the SDK fetches that one key from PromptOn before returning the provider settings. `track`
+times the block, builds the monitoring log and queues it; it returns whatever your block returned,
+and re-raises whatever your block raised. There is a runnable version in
+[`examples/greeting.rb`](examples/greeting.rb), which works with no server at all because it ships
+a bundled use-case document.
 
 Prefer an explicit object over the module-level default? `PromptOn::Client.new(...)` gives you one,
 and you can hold as many as you like.
@@ -64,10 +66,11 @@ set.
 | `api_key` | `PTN_API_KEY` | none | `ptn_<project_slug>_…`. Without it, no remote calls at all |
 | `environment` | `PTN_ENVIRONMENT` | `production` | Which environment's pins this process reads |
 | `project` | `PTN_PROJECT` | read from the API key | Guards the disk cache and the bundle |
-| `cache_ttl` | | `10.0` | Seconds a use-case document is served from memory before a refresh |
-| `max_backoff` | | `300.0` | Cap of the ×2 backoff after a failed refresh |
+| `cache_ttl` | | `10.0` | Deprecated for config fetching; config freshness and attempt rate limit are fixed at 10 seconds |
+| `max_backoff` | | `300.0` | Accepted for compatibility; config fetches no longer use backoff |
+| `config_fetch_timeout` | | `1.0` | Deprecated; config fetch budget is fixed at 1 second including response body |
 | `timeout` | | `5.0` | Seconds; `open_timeout` and `read_timeout` override it separately |
-| `poll` | | `true` | Background poll loop. With `false` the next call revalidates instead |
+| `poll` | | `true` | Accepted for compatibility; runtime config fetching is always demand-driven and starts no poller |
 | `disk_cache` | | `true` | `true` for the OS cache directory, a path, or `false` |
 | `bundle` | `PTN_BUNDLE` | none | Path to a use-case document committed into the app |
 | `mode` | | `:live` | `:live`, `:test` (no HTTP, logs captured) or `:offline` (disk/bundle only) |
@@ -88,29 +91,37 @@ The default disk cache path is named by project and environment, for example
 ## Resilience: how config reaches your process
 
 ```
-start:   memory ──▶ disk cache ──▶ bundled use-case document ──▶ remote
-serve:   every use-case selection reads memory, with no HTTP call inside the cache TTL
-refresh: GET /use-cases?environment=… with If-None-Match, in the background
-         200 ─▶ swap in memory + write the disk cache atomically   source: remote
-         304 ─▶ nothing to parse, nothing to write
-         fail ─▶ keep serving the previous document, back off       source: disk | bundle
+startup: memory ──▶ disk cache ──▶ bundled use-case document
+lookup:  use_case("greeting") checks only greeting's cache
+fetch:   GET /prompts/greeting?environment=… with greeting's If-None-Match
+         200 ─▶ replace greeting only + write the merged disk cache   source: remote
+         304 ─▶ mark greeting remotely validated                      source: remote
+         fail ─▶ keep serving greeting's last valid value              source: stale remote | disk | bundle
 ```
 
-- **Ten-second cache.** Within `cache_ttl` every use-case selection is served from memory. When it has
-  passed, the SDK refreshes with `If-None-Match` — a `304` costs nothing, so a short interval is
-  cheap.
-- **A refresh never blocks or fails a provider call.** It runs on a poll thread (or, with
-  `poll: false`, as a stale-while-revalidate refresh the next call triggers). While it is in
-  flight, and if it fails, the previous document is what every use-case selection reads.
-- **Rate limits.** On `429` the SDK reads `Retry-After` (falling back to
-  `error.details.retry_after`, then to the backoff) and does not contact the server again before
-  it has elapsed. `5xx`, timeouts and transport errors back off ×2 from the cache TTL up to five
-  minutes. The caller never sees any of it.
+- **No startup or idle config traffic.** Constructing a client loads disk and bundle files only. It
+  does not fetch remote config and does not start a polling thread. PromptOn is contacted when the
+  app actually resolves a prompt for an LLM call.
+- **Fixed ten-second prompt cache.** Each SDK instance keeps separate state per project, environment
+  and prompt key. A successful remote `200` or meaningful `304` makes that key fresh for 10 seconds.
+  Expiry marks the value stale; it never deletes the last valid value. Legacy `cache_ttl:` values do
+  not change runtime config fetch timing.
+- **Fixed ten-second attempt gate.** At most one remote config attempt starts per prompt key per 10
+  seconds, including failed attempts. `last_attempt` and `last_success` are tracked separately, so a
+  failed request also prevents another remote attempt for the next 10 seconds.
+- **Fixed one-second config budget, no retry.** A config fetch has 1 second total, including response
+  body consumption. Legacy `config_fetch_timeout:` values do not change this. The HTTP layer does not retry. If the fetch does not produce
+  a valid response in time, the SDK immediately uses the last valid value for that key, even when
+  expired.
+- **Same-key singleflight.** Concurrent callers resolving the same prompt share one in-flight
+  fetch and its original deadline. Different prompt keys have independent cache state and are not
+  blocked behind a slow key.
 - **Three tiers, no external services.** Memory, one local file, and a file bundled into the app.
-  No database, no Redis, nothing shared: instances never coordinate, which ETag polling makes
-  cheap. Several processes on one host may share the disk file — writes are a temp file plus a
-  rename, readers tolerate a concurrent rename, and a corrupt or partial file is ignored rather
-  than raised.
+  No database, no Redis, nothing shared. Several processes on one host may share the disk file —
+  writes are a temp file plus a rename, readers tolerate a concurrent rename, and a corrupt or
+  partial file is ignored rather than raised. The sidecar also stores prompt-specific raw documents,
+  so a restart preserves each prompt's immutable model/version view even when the merged export has
+  shared ids.
 - **A document from the wrong environment or project is never used.** A `staging` process cannot
   boot on a `production` bundle; the file records both and a mismatch is ignored with a warning.
 - **Never fall back to a hard-coded prompt.** `PromptOn::UnresolvedError` and
@@ -120,7 +131,7 @@ Build the bundle at release time and commit it:
 
 ```ruby
 client = PromptOn::Client.new(api_key: ENV.fetch("PTN_API_KEY"))
-client.refresh!                                             # fetch once, now
+client.use_case("greeting")                                 # fetches greeting once when needed
 client.export_use_case_document("config/prompton/use-cases.production.json")
 ```
 
@@ -128,22 +139,24 @@ Then ship it with `bundle: Rails.root.join("config/prompton/use-cases.production
 file per environment: a single shared bundle is refused by the environment guard in whichever
 environment it was not exported from.
 
-`client.use_case_document_info` tells you where the current document came from and how old it is;
-`client.use_case_document_status` tells you when the next fetch is due.
+`client.use_case_document_info` tells you where the current merged document came from and how old it
+is; `client.use_case_document_status("greeting")` tells you greeting's last attempt, failures and
+next allowed fetch time.
 
 ## How it fails
 
 | Situation | What the SDK does | What your app sees |
 |---|---|---|
-| Inside the cache TTL | serves memory | no HTTP call at all |
-| `304 Not Modified` | keeps the document | nothing |
-| `429` with `Retry-After` | waits it out, serves the previous document | nothing; one warning line |
-| `5xx`, timeout, DNS, connection refused | backs off ×2 from the TTL to 5 min, serves the previous document | nothing; one warning line |
+| Inside the prompt cache TTL | serves memory | no HTTP call at all |
+| Expired prompt cache | fetches that prompt key only, waiting up to the fixed 1-second budget | the first call after expiry may wait up to 1 second |
+| `304 Not Modified` with a cached value | marks that prompt remotely validated | nothing |
+| `304 Not Modified` with no cached value | treats it as a failed fetch | `PromptOn::NotReadyError` on a cold cache |
+| `429`, `5xx`, timeout, DNS, connection refused | serves the previous value and rate-limits the next attempt for 10 seconds | stale config, or `PromptOn::NotReadyError` when cold |
 | PromptOn down, disk cache present | serves the disk document | `use_case.source == "disk"` |
 | PromptOn down, only a bundle present | serves the bundled document | `use_case.source == "bundle"` |
 | PromptOn down, nothing cached anywhere | cannot select a use case | `PromptOn::NotReadyError` |
 | Use-case document from another environment or project | ignores the file | one warning line; keeps looking |
-| Use-case document with an unreadable `schema_version` | refuses it, keeps polling | `PromptOn::UnsupportedSchemaVersionError` on an explicit refresh |
+| Use-case document with an unreadable `schema_version` | refuses it and keeps the previous value | `PromptOn::UnsupportedSchemaVersionError` only when no value exists |
 | Use case key not in the use-case document | — | `PromptOn::UnknownUseCaseError` |
 | Use case with no live deployment here | — | `PromptOn::UnresolvedError` |
 | Prompt name the pin does not carry | never falls back to `default` | `PromptOn::UnknownPromptError` with `prompt_names` |

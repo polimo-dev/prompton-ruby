@@ -3,240 +3,232 @@
 require_relative "errors"
 
 module PromptOn
-  # Keeps the snapshot fresh without ever standing between the app and its provider call.
-  #
-  # Within the cache TTL (10 s by default) every resolve is served from memory with no HTTP call.
-  # Once the TTL has passed the document is refreshed with `If-None-Match` — in a background poll
-  # loop, or, when polling is off, by a stale-while-revalidate refresh the next call triggers.
-  # A refresh never blocks and never fails a log: while one is in flight, and if it fails,
-  # the previous document is what every resolve reads.
-  #
-  # On 429 the Retry-After header (then error.details.retry_after, then the backoff) decides when
-  # the server may be contacted again. 5xx, timeouts and transport errors back off ×2 from the
-  # TTL up to five minutes. In every case the caller keeps the previous document, never an error.
-  #
-  # The one time a caller does wait is the cold start: nothing in memory, nothing on disk, no
-  # bundle. Then #ensure_document fetches once in the calling thread, because there is nothing
-  # else to serve.
+  # Demand-driven prompt config fetcher. The class keeps the legacy name because it is part of the
+  # internal wiring, but it no longer polls: remote config is fetched only when a prompt key is
+  # resolved for an LLM call.
   class SnapshotPoller
-    # +clock+ is the monotonic clock, injectable so a test can pretend the host booted a moment
-    # ago — the reading a cold start used to get wrong.
+    State = Struct.new(:last_attempt_at, :last_success_at, :inflight, :failures, keyword_init: true)
+    Inflight = Struct.new(:done, :ok, :deadline_at, :condition, keyword_init: true)
+
     def initialize(config, store, http, clock: nil)
       @config = config
       @store = store
       @http = http
       @clock = clock || -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) }
       @mutex = Mutex.new
-      @attempt_mutex = Mutex.new
-      @wake = ConditionVariable.new
-      @last_attempt = nil
-      @next_allowed_at = 0.0
-      @failures = 0
-      @refreshing = false
-      @stopped = false
-      @thread = nil
-      @refresh_thread = nil
+      @states = {}
     end
 
-    # Starts the background poll loop. A no-op unless polling is enabled and remote calls are
-    # possible at all.
     def start
-      return self unless @config.remote? && @config.poll
-      return self if @thread&.alive?
-
-      @mutex.synchronize { @stopped = false }
-      @thread = Thread.new { poll_loop }
-      @thread.name = "prompton-snapshot"
-      @thread.abort_on_exception = false
       self
     end
 
-    # Stops the poll loop and waits briefly for an in-flight background refresh, so a script that
-    # resolves once and exits still gets that refresh's disk write.
     def stop
-      @mutex.synchronize do
-        @stopped = true
-        @wake.broadcast
-      end
-      @thread&.join(2)
-      @thread = nil
-      @mutex.synchronize { @refresh_thread }&.join(2)
-      @mutex.synchronize { @refresh_thread = nil }
       self
     end
 
-    # Called by every resolve once a document is in hand. Triggers a background refresh when the
-    # TTL has passed and no poll loop is covering it. Returns immediately either way.
-    def ensure_fresh
-      return if !@config.remote? || @thread&.alive?
-      return unless claim_refresh
-
-      thread = Thread.new do
-        attempt(only_if_due: true)
-      ensure
-        @mutex.synchronize { @refreshing = false }
-      end
-      thread.name = "prompton-snapshot-refresh"
-      thread.abort_on_exception = false
-      @mutex.synchronize { @refresh_thread = thread }
+    def ensure_fresh(_prompt_key = nil)
       nil
     end
 
-    # Makes sure some document is available, waiting for one fetch if there is nothing at all to
-    # serve. Returns true when the store holds a document afterwards.
-    def ensure_document
-      return true unless @store.entry.nil?
-      return false unless @config.remote?
+    def ensure_prompt(prompt_key)
+      key = prompt_key.to_s
+      @store.load_local if @store.entry.nil?
+      return true if fresh?(key)
+      return !@store.prompt_entry(key).nil? unless @config.remote?
 
-      @attempt_mutex.synchronize do
-        # Another thread may have installed one while we waited for this lock.
-        next true unless @store.entry.nil?
-        next false if due_in.positive?
+      inflight, owner = claim(key)
+      return wait_for(key, inflight) unless owner
 
-        perform
-      end
-
-      !@store.entry.nil?
+      perform(key, inflight)
+      !@store.prompt_entry(key).nil?
     end
 
-    # Fetches once, now, in the calling thread. Returns true on success; never raises.
-    def refresh
-      refresh!
+    alias ensure_document ensure_prompt
+
+    def refresh(prompt_key = nil)
+      refresh!(prompt_key)
       true
     rescue Error
       false
     end
 
-    # Fetches once, now, in the calling thread, and raises PromptOn::ApiError or
-    # PromptOn::TransportError when it fails. This is the "fetch once now" a script wants.
-    def refresh!
+    def refresh!(prompt_key = nil)
       unless @config.remote?
         return true if @store.load_local
 
         raise NotReadyError
       end
 
-      attempt(raise_on_error: true)
+      keys = prompt_key ? [prompt_key.to_s] : known_keys
+      raise NotReadyError if keys.empty?
+
+      keys.each do |key|
+        inflight, owner = claim(key)
+        owner ? perform(key, inflight, raise_on_error: true) : wait_for(key, inflight, raise_on_error: true)
+      end
+      true
     end
 
-    def status
+    def status(prompt_key = nil)
       @mutex.synchronize do
-        { last_attempt_at: @last_attempt, failures: @failures,
-          polling: !@thread.nil? && @thread.alive?,
-          next_attempt_in: [@next_allowed_at - now, 0.0].max.round(3) }
+        if prompt_key
+          state = @states[prompt_key.to_s]
+          return state_status(state)
+        end
+
+        { last_attempt_at: @states.values.filter_map(&:last_attempt_at).max,
+          failures: @states.values.sum { |state| state.failures || 0 },
+          polling: false,
+          next_attempt_in: @states.values.map { |state| due_in_locked(state) }.min || 0.0 }
       end
     end
 
     private
 
-    # +only_if_due+ makes a background refresh a no-op when another thread has just done one, so
-    # a burst of concurrent resolves costs a single fetch rather than one each.
-    def attempt(raise_on_error: false, only_if_due: false)
-      @attempt_mutex.synchronize do
-        next false if only_if_due && due_in.positive?
+    def fresh?(key)
+      entry = @store.prompt_entry(key)
+      return false if entry.nil? || entry.source != "remote"
 
-        perform(raise_on_error: raise_on_error)
-      end
+      now - monotonic_success_at(key, entry) < @config.cache_ttl
     end
 
-    def claim_refresh
+    def claim(key, force: false)
       @mutex.synchronize do
-        next false if @refreshing || @stopped || due_in_locked.positive?
+        state = (@states[key] ||= State.new(failures: 0))
+        return [state.inflight, false] if state.inflight
+        return [nil, false] if !force && state.last_attempt_at && now - state.last_attempt_at < @config.cache_ttl
 
-        @refreshing = true
+        inflight = Inflight.new(done: false, ok: false, deadline_at: now + @config.config_fetch_timeout,
+                                condition: ConditionVariable.new)
+        state.last_attempt_at = now
+        state.inflight = inflight
+        [inflight, true]
       end
     end
 
-    def poll_loop
-      loop do
-        wait = @mutex.synchronize do
-          break nil if @stopped
+    def wait_for(key, inflight, raise_on_error: false)
+      return !@store.prompt_entry(key).nil? if inflight.nil?
 
-          delay = due_in_locked
-          @wake.wait(@mutex, delay) if delay.positive?
-          @stopped ? nil : due_in_locked
+      @mutex.synchronize do
+        until inflight.done
+          remaining = inflight.deadline_at - now
+          break if remaining <= 0
+
+          inflight.condition.wait(@mutex, remaining)
         end
-        break if wait.nil?
-        next if wait.positive?
-
-        attempt(only_if_due: true)
       end
-    rescue StandardError => e
-      @config.logger.error("[PromptOn] snapshot poll loop stopped: #{e.class}: #{e.message}")
+      entry = @store.prompt_entry(key)
+      raise NotReadyError if raise_on_error && entry.nil?
+
+      !entry.nil?
     end
 
-    # Seconds until the server may be contacted again: the cache TTL since the last attempt, or
-    # the backoff / Retry-After window, whichever is later.
-    #
-    # Having never attempted a fetch means "due now", not "due at absolute time cache_ttl": the
-    # clock is monotonic and starts near zero at boot, so treating a missing @last_attempt as 0.0
-    # would hold the very first fetch back for the whole TTL on a freshly booted host.
-    def due_in
-      @mutex.synchronize { due_in_locked }
+    def perform(key, inflight, raise_on_error: false)
+      error = nil
+      ok = false
+      begin
+        current = @store.prompt_entry(key)
+        budget = [inflight.deadline_at - now, 0.001].max
+        response = @http.get_prompt(key, environment: @config.environment, etag: current&.etag,
+                                         timeout: budget)
+        ok = handle(key, response, inflight.deadline_at)
+      rescue Error => e
+        error = e
+        failed(key, e.message)
+      rescue StandardError => e
+        error = TransportError.new("#{e.class}: #{e.message}")
+        failed(key, error.message)
+      ensure
+        finish(key, inflight, ok)
+      end
+      raise error if raise_on_error && error && @store.prompt_entry(key).nil?
+
+      ok
     end
 
-    def due_in_locked
-      current = now
-      due_at = [@last_attempt ? @last_attempt + @config.cache_ttl : current, @next_allowed_at].max
-      [due_at - current, 0.0].max
-    end
+    def handle(key, response, deadline_at)
+      if now > deadline_at
+        failed(key, "config fetch exceeded #{@config.config_fetch_timeout}s")
+        return false
+      end
 
-    def perform(raise_on_error: false)
-      current = @store.entry
-      @mutex.synchronize { @last_attempt = now }
-      response = @http.get_snapshot(environment: @config.environment, etag: current&.etag)
-      handle(response, raise_on_error: raise_on_error)
-    rescue TransportError => e
-      failed(e.message, raise_on_error: raise_on_error, error: e)
-    end
-
-    def handle(response, raise_on_error:)
       case response.status
       when 200
-        @store.install_remote(response.body, etag: response.etag,
-                                             last_modified: response.header("last-modified"))
-        succeeded
+        @store.install_prompt_remote(key, response.body, etag: response.etag,
+                                                         last_modified: response.header("last-modified"),
+                                                         deadline_expired: -> { now > deadline_at })
+        succeeded(key)
         true
       when 304
-        @store.confirm_current
-        succeeded
+        unless @store.prompt_entry(key)
+          failed(key, "PromptOn answered 304 without a cached prompt")
+          return false
+        end
+        @store.confirm_current(key, etag: response.etag, last_modified: response.header("last-modified"))
+        succeeded(key)
         true
-      when 429
-        failed("rate limited by PromptOn", retry_after: response.retry_after_seconds,
-                                           raise_on_error: raise_on_error,
-                                           error: ApiError.new(429, response.body))
       else
-        failed("PromptOn answered #{response.status}", retry_after: response.retry_after_seconds,
-                                                       raise_on_error: raise_on_error,
-                                                       error: ApiError.new(response.status, response.body))
+        failed(key, "PromptOn answered #{response.status}")
+        raise ApiError.new(response.status, response.body) if @store.prompt_entry(key).nil?
+
+        false
       end
     rescue InvalidUseCaseDocumentError => e
-      failed(e.message, raise_on_error: raise_on_error, error: e)
-    end
-
-    def succeeded
-      @mutex.synchronize do
-        @failures = 0
-        @next_allowed_at = now + @config.cache_ttl
-      end
-    end
-
-    def failed(reason, retry_after: nil, raise_on_error: false, error: nil)
-      delay = @mutex.synchronize do
-        @failures += 1
-        computed = retry_after || [@config.cache_ttl * (2**(@failures - 1)), @config.max_backoff].min
-        @next_allowed_at = now + computed
-        computed
-      end
-
-      @store.mark_stale
-      @config.logger.warn(
-        "[PromptOn] snapshot refresh failed (#{reason}); serving the cached snapshot, " \
-        "next attempt in #{delay.round(1)}s"
-      )
-      raise error if raise_on_error && error
+      failed(key, e.message)
+      raise e if @store.prompt_entry(key).nil?
 
       false
+    end
+
+    def succeeded(key)
+      @mutex.synchronize do
+        state = (@states[key] ||= State.new(failures: 0))
+        state.last_success_at = now
+        state.failures = 0
+      end
+    end
+
+    def failed(key, reason)
+      @store.mark_stale(key)
+      @mutex.synchronize do
+        state = (@states[key] ||= State.new(failures: 0))
+        state.failures = state.failures.to_i + 1
+      end
+      @config.logger.warn("[PromptOn] config fetch for #{key.inspect} failed (#{reason}); serving cached config")
+      false
+    end
+
+    def finish(key, inflight, success)
+      @mutex.synchronize do
+        state = @states[key]
+        state.inflight = nil if state&.inflight.equal?(inflight)
+        inflight.ok = success
+        inflight.done = true
+        inflight.condition.broadcast
+      end
+    end
+
+    def known_keys
+      @store.entry&.data&.use_case_keys || []
+    end
+
+    def state_status(state)
+      { last_attempt_at: state&.last_attempt_at, failures: state&.failures.to_i,
+        polling: false, next_attempt_in: due_in_locked(state).round(3) }
+    end
+
+    def due_in_locked(state)
+      return 0.0 unless state&.last_attempt_at
+
+      [state.last_attempt_at + @config.cache_ttl - now, 0.0].max
+    end
+
+    def monotonic_success_at(key, entry)
+      @mutex.synchronize do
+        state = (@states[key] ||= State.new(failures: 0))
+        state.last_success_at ||= now - (Time.now - entry.fetched_at)
+      end
     end
 
     def now

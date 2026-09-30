@@ -2,13 +2,15 @@
 
 require_relative "test_helper"
 
-# The caching rules the SDK promises: a 10-second memory cache, ETag polling, Retry-After on 429,
-# exponential backoff on everything else, and the last good document served through all of it.
 class SnapshotCacheTest < Minitest::Test
   def setup
     @dir = Dir.mktmpdir("prompton-cache")
     @logger = MemoryLogger.new
-    @state = { body: snapshot_json, etag: "\"v1\"", status: 200, retry_after: nil, delay: nil }
+    @clock = FakeClock.new
+    @state = {
+      "greeting" => { body: prompt_json("greeting"), etag: "\"greeting-v1\"", status: 200 },
+      "summarize" => { body: prompt_json("summarize"), etag: "\"summarize-v1\"", status: 200 }
+    }
     @server = PromptOnTest::StubServer.new { |request| respond(request) }
     @server_url = @server.url
     @clients = []
@@ -20,253 +22,301 @@ class SnapshotCacheTest < Minitest::Test
     FileUtils.remove_entry(@dir)
   end
 
-  def test_within_the_ttl_every_resolve_is_served_from_memory_with_no_http_call
-    client = build_client(cache_ttl: 30.0)
+  def test_startup_and_idle_make_no_config_fetches
+    build_client
+    sleep(0.05)
 
-    10.times { assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model }
-
-    assert_equal 1, @server.request_count, "one boot fetch, then nothing"
+    assert_equal 0, @server.request_count
   end
 
-  def test_after_the_ttl_the_document_is_refreshed_with_if_none_match
-    client = build_client(cache_ttl: 0.05)
-    client.use_case("greeting")
-
-    sleep(0.1)
-    client.use_case("greeting")
-
-    wait_until { @server.request_count >= 2 }
-    assert_equal "\"v1\"", @server.recorded.last.headers["if-none-match"]
-    assert_equal "remote", client.use_case_document_info[:source]
-  end
-
-  def test_a_304_leaves_the_document_in_place
-    client = build_client(cache_ttl: 0.05)
-    client.use_case("greeting")
-    sleep(0.1)
-
-    assert client.refresh
-    assert_equal 304, last_status
-    assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model
-  end
-
-  def test_a_new_revision_is_picked_up_on_the_next_poll
-    client = build_client(cache_ttl: 0.05)
-    assert_in_delta 0.2, client.use_case("greeting").params["temperature"]
-
-    @state[:body] = snapshot_json(temperature: 0.9)
-    @state[:etag] = "\"v2\""
-    sleep(0.1)
-    client.refresh
-
-    assert_in_delta 0.9, client.use_case("greeting").params["temperature"]
-  end
-
-  def test_a_burst_of_concurrent_resolves_costs_one_refresh_not_one_each
-    client = build_client(cache_ttl: 0.05)
-    client.use_case("greeting")
-    @state[:delay] = 0.05
-    sleep(0.1)
-
-    threads = Array.new(20) { Thread.new { client.use_case("greeting").model } }
-    assert_equal ["openai/gpt-4o-mini"], threads.map(&:value).uniq
-
-    wait_until { @server.request_count >= 2 }
-    sleep(0.2)
-    assert_equal 2, @server.request_count
-  end
-
-  def test_resolved_evidence_is_frozen_so_it_can_be_shared_between_threads
+  def test_cold_lookup_fetches_only_the_requested_prompt_url
     client = build_client
-    use_case = client.use_case("greeting")
 
-    assert_predicate use_case.__send__(:evidence), :frozen?
-    assert_predicate client.use_case_document, :frozen?
+    assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model
+
+    assert_equal 1, @server.request_count
+    request = @server.recorded.first
+    assert_equal "/api/v1/prompts/greeting", request.path
+    assert_equal({ "environment" => "production" }, request.query)
   end
 
-  def test_a_refresh_in_flight_never_blocks_a_provider_call
-    client = build_client(cache_ttl: 0.05)
-    client.use_case("greeting")
-
-    @state[:delay] = 1.0
-    sleep(0.1)
-    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-    client.use_case("greeting")
-    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
-
-    assert_operator elapsed, :<, 0.3, "the stale-while-revalidate refresh must not block the caller"
-  end
-
-  def test_a_429_waits_out_retry_after_and_the_caller_never_sees_an_error
-    client = build_client(cache_ttl: 0.01)
-    client.use_case("greeting")
-
-    @state[:status] = 429
-    @state[:retry_after] = 30
-    client.refresh
-    after_429 = @server.request_count
-
-    5.times do
-      sleep(0.02)
-      assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model
-    end
-
-    assert_equal after_429, @server.request_count, "no request before Retry-After has elapsed"
-    assert(@logger.lines.any? { |line| line.include?("serving the cached snapshot") })
-  end
-
-  def test_retry_after_can_also_arrive_in_the_error_details
-    client = build_client(cache_ttl: 0.01)
-    client.use_case("greeting")
-
-    @state[:status] = :rate_limited_with_details
-    refute client.refresh
-    after_429 = @server.request_count
-
-    3.times do
-      sleep(0.02)
-      client.use_case("greeting")
-    end
-
-    assert_equal after_429, @server.request_count
-    assert_operator client.use_case_document_status[:next_attempt_in], :>, 25
-  end
-
-  def test_a_5xx_backs_off_from_the_ttl_doubling_each_time
-    client = build_client(cache_ttl: 1.0)
-    client.use_case("greeting")
-    @state[:status] = 503
-
-    refute client.refresh
-    assert_in_delta 1.0, client.use_case_document_status[:next_attempt_in], 0.2
-
-    refute client.refresh
-    assert_in_delta 2.0, client.use_case_document_status[:next_attempt_in], 0.2
-
-    refute client.refresh
-    assert_in_delta 4.0, client.use_case_document_status[:next_attempt_in], 0.2
-  end
-
-  def test_a_5xx_keeps_serving_the_previous_document
-    client = build_client(cache_ttl: 1.0)
-    client.use_case("greeting")
-
-    @state[:status] = 503
-    refute client.refresh
-    after_failure = @server.request_count
+  def test_fresh_cache_hit_makes_no_http_call
+    client = build_client
 
     3.times { assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model }
 
-    assert_equal after_failure, @server.request_count, "no request before the backoff has elapsed"
-    assert client.use_case_document_info[:stale]
-    assert_equal 1, client.use_case_document_status[:failures]
+    assert_equal 1, @server.request_count
   end
 
-  def test_when_prompton_is_down_the_previous_document_still_answers
-    client = build_client(cache_ttl: 0.01)
+  def test_expired_cache_fetches_with_the_prompt_specific_etag
+    client = build_client
     client.use_case("greeting")
-    @server.stop
+    @state["greeting"][:etag] = "\"greeting-v2\""
+    @state["greeting"][:body] = prompt_json("greeting", temperature: 0.9)
 
-    3.times do
-      sleep(0.02)
-      assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model
-    end
+    @clock.advance(10.01)
+    assert_in_delta 0.9, client.use_case("greeting").params["temperature"]
+
+    assert_equal 2, @server.request_count
+    assert_equal "\"greeting-v1\"", @server.recorded.last.headers["if-none-match"]
   end
 
-  def test_a_cold_start_with_nothing_cached_fails_with_a_clear_error
-    client = build_client(host: PromptOnTest::StubServer.dead_url)
+  def test_failed_attempts_are_throttled_for_the_cache_ttl_and_serve_stale
+    client = build_client
+    assert_in_delta 0.2, client.use_case("greeting").params["temperature"]
 
-    error = assert_raises(PromptOn::NotReadyError) { client.use_case("greeting") }
+    @state["greeting"][:status] = 503
+    @clock.advance(10.01)
 
-    assert_includes error.message, "unreachable"
-    assert_includes error.message, "nothing is cached"
+    3.times { assert_in_delta 0.2, client.use_case("greeting").params["temperature"] }
+
+    assert_equal 2, @server.request_count
+    assert_equal 1, client.use_case_document_status("greeting")[:failures]
   end
 
-  def test_the_first_fetch_is_due_immediately_on_a_freshly_booted_host
-    # CLOCK_MONOTONIC counts from boot, so on a host that has been up for less than cache_ttl
-    # seconds a "never attempted" marker of 0.0 sits in the future: the first fetch would be held
-    # back and a healthy server reported as unreachable for the whole TTL.
-    config = PromptOn::Config.new(**client_options(logger: @logger, host: @server_url,
-                                                   cache_ttl: 600.0))
-    store = PromptOn::SnapshotStore.new(config)
-    poller = PromptOn::SnapshotPoller.new(config, store, PromptOn::Http.new(config),
-                                          clock: -> { 5.0 })
-
-    assert poller.ensure_document, "the first fetch is due now, not cache_ttl seconds from now"
-    assert_equal 1, @server.request_count
-    assert_equal "openai/gpt-4o-mini", PromptOn::Resolver.resolve(store.data, "greeting").model
-  end
-
-  def test_a_fetch_that_has_just_happened_is_not_due_again_within_the_ttl
-    config = PromptOn::Config.new(**client_options(logger: @logger, host: @server_url,
-                                                   cache_ttl: 600.0))
-    store = PromptOn::SnapshotStore.new(config)
-    poller = PromptOn::SnapshotPoller.new(config, store, PromptOn::Http.new(config),
-                                          clock: -> { 5.0 })
-    poller.ensure_document
-
-    store.clear
-    refute poller.ensure_document, "the TTL still applies once an attempt has been made"
-    assert_equal 1, @server.request_count
-  end
-
-  def test_close_waits_for_the_background_refresh_so_its_disk_write_lands
-    File.write(bundle_path, snapshot_json)
-    client = build_client(disk_cache: disk_path, bundle: bundle_path)
-    @state[:delay] = 0.2
-
-    assert_equal "bundle", client.use_case("greeting").source
-    client.close
-
-    assert_path_exists disk_path, "the in-flight refresh finishes before close returns"
-    assert_path_exists "#{disk_path}.meta.json"
-  end
-
-  def test_the_disk_cache_survives_a_restart_with_prompton_down
-    build_client(disk_cache: disk_path).use_case("greeting")
-    @server.stop
-
-    restarted = build_client(disk_cache: disk_path, host: PromptOnTest::StubServer.dead_url)
-
-    assert_equal "openai/gpt-4o-mini", restarted.use_case("greeting").model
-    assert_equal "disk", restarted.use_case_document_info[:source]
-    assert_equal "disk", restarted.use_case("greeting").source
-  end
-
-  def test_the_bundle_answers_when_memory_and_disk_are_empty
-    File.write(bundle_path, snapshot_json)
-    client = build_client(disk_cache: File.join(@dir, "absent.json"), bundle: bundle_path,
-                          host: PromptOnTest::StubServer.dead_url)
-
-    assert_equal "bundle", client.use_case("greeting").source
-  end
-
-  def test_a_bundle_from_another_environment_is_refused
-    File.write(bundle_path, snapshot_json(environment: "staging"))
-    client = build_client(disk_cache: false, bundle: bundle_path,
-                          host: PromptOnTest::StubServer.dead_url)
+  def test_cold_failure_returns_a_normal_not_ready_error_and_is_rate_limited
+    @state["greeting"][:status] = 503
+    client = build_client
 
     assert_raises(PromptOn::NotReadyError) { client.use_case("greeting") }
-  end
+    assert_raises(PromptOn::NotReadyError) { client.use_case("greeting") }
 
-  def test_fetch_once_now_is_available_for_scripts
-    client = build_client(cache_ttl: 300.0)
-    assert client.refresh!
     assert_equal 1, @server.request_count
-
-    assert client.refresh!, "refresh! ignores the cache window"
-    assert_equal 2, @server.request_count
   end
 
-  def test_refresh_raises_the_underlying_failure_while_refresh_reports_it
+  def test_304_revalidates_the_cached_prompt
     client = build_client
-    @state[:status] = 500
+    client.use_case("greeting")
+    @state["greeting"][:status] = 304
 
-    refute client.refresh
-    assert_raises(PromptOn::ApiError) { client.refresh! }
+    @clock.advance(10.01)
+    assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model
+
+    assert_equal 2, @server.request_count
+    assert_equal "\"greeting-v1\"", client.use_case("greeting").etag
+    refute client.use_case_document_info[:stale]
   end
 
-  def test_the_current_document_can_be_exported_as_a_bundle
+  def test_304_without_a_cached_value_is_a_failure
+    @state["greeting"][:status] = 304
+    client = build_client
+
+    assert_raises(PromptOn::NotReadyError) { client.use_case("greeting") }
+
+    assert_equal 1, @server.request_count
+  end
+
+  def test_http_errors_do_not_retry_inside_one_fetch
+    @state["greeting"][:status] = 500
+    client = build_client
+
+    assert_raises(PromptOn::NotReadyError) { client.use_case("greeting") }
+
+    assert_equal 1, @server.request_count
+  end
+
+  def test_transport_disconnect_does_not_use_net_http_automatic_retry
+    @server.stop
+    attempts = Queue.new
+    closing_server = TCPServer.new("127.0.0.1", 0)
+    closer =
+      Thread.new do
+        loop do
+          connection = closing_server.accept
+          attempts << :accepted
+          connection.close
+        end
+      rescue IOError, Errno::EBADF
+        nil
+      end
+    host = "http://127.0.0.1:#{closing_server.addr[1]}"
+    client = build_client(host: host, config_fetch_timeout: 0.2)
+
+    assert_raises(PromptOn::NotReadyError) { client.use_case("greeting") }
+
+    assert_equal :accepted, attempts.pop(true)
+    assert_raises(ThreadError) { attempts.pop(true) }
+  ensure
+    closing_server&.close
+    closer&.join(1)
+  end
+
+  def test_unexpected_fetch_exception_clears_inflight_and_allows_later_retry
+    client = build_client
+    http = client.instance_variable_get(:@http)
+    original_get_prompt = http.method(:get_prompt)
+    attempts = 0
+    http.define_singleton_method(:get_prompt) do |*args, **kwargs|
+      attempts += 1
+      raise "socket exploded" if attempts == 1
+
+      original_get_prompt.call(*args, **kwargs)
+    end
+
+    assert_raises(PromptOn::NotReadyError) { client.use_case("greeting") }
+    assert_raises(PromptOn::NotReadyError) { client.use_case("greeting") }
+    assert_equal 1, attempts
+    assert_equal 0, @server.request_count
+
+    @clock.advance(10.01)
+    assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model
+
+    assert_equal 2, attempts
+    assert_equal 1, @server.request_count
+  end
+
+  def test_one_second_total_timeout_serves_stale_and_discards_the_late_result
+    client = build_client
+    client.use_case("greeting")
+    @state["greeting"][:delay] = 1.25
+    @state["greeting"][:etag] = "\"greeting-v2\""
+    @state["greeting"][:body] = prompt_json("greeting", temperature: 0.9)
+
+    @clock.advance(10.01)
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    assert_in_delta 0.2, client.use_case("greeting").params["temperature"]
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+
+    assert_operator elapsed, :<, 1.15
+    sleep(0.3)
+    assert_in_delta 0.2, client.use_case("greeting").params["temperature"]
+  end
+
+  def test_same_prompt_concurrent_cold_requests_share_one_fetch
+    @state["greeting"][:delay] = 0.05
+    client = build_client
+
+    threads = Array.new(12) { Thread.new { client.use_case("greeting").model } }
+
+    assert_equal ["openai/gpt-4o-mini"], threads.map(&:value).uniq
+    assert_equal 1, @server.request_count
+  end
+
+  def test_different_prompt_keys_are_independent
+    @state["greeting"][:delay] = 0.25
+    client = build_client
+    summary_elapsed = nil
+
+    slow = Thread.new { client.use_case("greeting").model }
+    fast = Thread.new do
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      model = client.use_case("summarize").model
+      summary_elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+      model
+    end
+
+    assert_equal "openai/gpt-4o-mini", fast.value
+    assert_operator summary_elapsed, :<, 0.15
+    assert_equal "openai/gpt-4o-mini", slow.value
+    assert_equal ["/api/v1/prompts/greeting", "/api/v1/prompts/summarize"].sort,
+                 @server.recorded.map(&:path).sort
+  end
+
+  def test_scope_mismatch_is_rejected_without_replacing_stale_cache
+    client = build_client
+    client.use_case("greeting")
+    @state["greeting"][:body] = prompt_json("greeting", project: "other")
+    @state["greeting"][:etag] = "\"bad\""
+
+    @clock.advance(10.01)
+    assert_in_delta 0.2, client.use_case("greeting").params["temperature"]
+
+    assert_equal "\"greeting-v1\"", client.use_case("greeting").etag
+  end
+
+  def test_disk_and_bundle_are_fallbacks_but_do_not_count_as_fresh_remote_validation
+    File.write(bundle_path, prompt_json("greeting", temperature: 0.4))
+    client = build_client(bundle: bundle_path)
+
+    assert_in_delta 0.2, client.use_case("greeting").params["temperature"]
+
+    assert_equal 1, @server.request_count
+    assert_equal "remote", client.use_case("greeting").source
+  end
+
+  def test_bundle_answers_when_prompton_is_unreachable
+    File.write(bundle_path, prompt_json("greeting", temperature: 0.4))
+    client = build_client(bundle: bundle_path, host: PromptOnTest::StubServer.dead_url)
+
+    assert_in_delta 0.4, client.use_case("greeting").params["temperature"]
+    assert_equal "bundle", client.use_case("greeting").source
+  end
+
+  def test_each_prompt_keeps_its_own_cache_and_etag
+    client = build_client
+    client.use_case("greeting")
+    client.use_case("summarize")
+    @state["greeting"][:etag] = "\"greeting-v2\""
+    @state["greeting"][:body] = prompt_json("greeting", temperature: 0.8)
+
+    @clock.advance(10.01)
+    assert_in_delta 0.8, client.use_case("greeting").params["temperature"]
+
+    paths = @server.recorded.map(&:path)
+    assert_equal 2, paths.count("/api/v1/prompts/greeting")
+    assert_equal 1, paths.count("/api/v1/prompts/summarize")
+    assert_equal "\"summarize-v1\"", client.use_case("summarize").etag
+  end
+
+  def test_prompt_cache_keeps_an_immutable_document_per_key
+    client = build_client
+
+    assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model
+
+    @state["summarize"][:etag] = "\"summarize-v2\""
+    @state["summarize"][:body] = prompt_json_with_model("summarize", "openai/changed-model")
+
+    assert_equal "openai/changed-model", client.use_case("summarize").model
+    assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model
+
+    paths = @server.recorded.map(&:path)
+    assert_equal 1, paths.count("/api/v1/prompts/greeting")
+    assert_equal 1, paths.count("/api/v1/prompts/summarize")
+  end
+
+  def test_disk_restore_keeps_immutable_prompt_documents_per_key
+    disk_path = File.join(@dir, "cache.json")
+    client = build_client(disk_cache: disk_path)
+
+    assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model
+    @state["summarize"][:etag] = "\"summarize-v2\""
+    @state["summarize"][:body] = prompt_json_with_model("summarize", "openai/changed-model")
+    assert_equal "openai/changed-model", client.use_case("summarize").model
+
+    @state["greeting"][:status] = 503
+    @state["summarize"][:status] = 503
+    restarted = build_client(disk_cache: disk_path)
+
+    assert_equal "openai/gpt-4o-mini", restarted.use_case("greeting").model
+    assert_equal "openai/changed-model", restarted.use_case("summarize").model
+  end
+
+  def test_late_validation_result_does_not_install_after_the_deadline
+    client = build_client
+    assert_in_delta 0.2, client.use_case("greeting").params["temperature"]
+    @state["greeting"][:etag] = "\"greeting-v2\""
+    @state["greeting"][:body] = prompt_json("greeting", temperature: 0.9)
+    @clock.advance(10.01)
+
+    original_parse = PromptOn::UseCaseDocument.method(:parse)
+    advance_during_next_parse = true
+    clock = @clock
+    PromptOn::UseCaseDocument.define_singleton_method(:parse) do |body|
+      parsed = original_parse.call(body)
+      if advance_during_next_parse
+        advance_during_next_parse = false
+        clock.advance(1.01)
+      end
+      parsed
+    end
+
+    assert_in_delta 0.2, client.use_case("greeting").params["temperature"]
+    assert_equal "\"greeting-v1\"", client.use_case("greeting").etag
+  ensure
+    PromptOn::UseCaseDocument.define_singleton_method(:parse) { |body| original_parse.call(body) } if original_parse
+  end
+
+  def test_export_writes_the_cached_prompt_document_as_a_bundle
     client = build_client
     client.use_case("greeting")
 
@@ -278,46 +328,58 @@ class SnapshotCacheTest < Minitest::Test
 
   private
 
-  def disk_path
-    File.join(@dir, "snapshot.json")
-  end
-
   def bundle_path
     File.join(@dir, "use-cases.production.json")
   end
 
-  attr_reader :last_status
-
   def build_client(**overrides)
-    options = client_options(logger: @logger, host: @server_url, **overrides)
+    options = client_options(logger: @logger, host: @server_url, _clock: @clock, **overrides)
     client = PromptOn::Client.new(**options)
     @clients << client
     client
   end
 
-  def respond(request)
-    sleep(@state[:delay]) if @state[:delay]
+  def prompt_json(key, **options)
+    document = snapshot_document(**options)
+    keep_prompt!(document, key)
+    JSON.generate(document)
+  end
 
-    case @state[:status]
+  def prompt_json_with_model(key, model)
+    document = snapshot_document
+    model_id = document.dig("deployments", key, "model_id")
+    document.fetch("models").fetch(model_id)["model_id"] = model
+    keep_prompt!(document, key)
+    JSON.generate(document)
+  end
+
+  def keep_prompt!(document, key)
+    document["use_cases"].select! { |candidate, _| candidate == key }
+    document["deployments"].select! { |candidate, _| candidate == key }
+    version_ids = document.dig("deployments", key, "prompt_pins")&.values || []
+    model_id = document.dig("deployments", key, "model_id")
+    document["prompt_versions"].select! { |id, _| version_ids.include?(id) }
+    document["models"].select! { |id, _| id == model_id }
+  end
+
+  def respond(request)
+    key = File.basename(request.path)
+    state = @state.fetch(key)
+    sleep(state[:delay]) if state[:delay]
+
+    case state[:status]
     when 200
-      if request.headers["if-none-match"] == @state[:etag]
-        @last_status = 304
-        [304, { "etag" => @state[:etag] }, nil]
+      if request.headers["if-none-match"] == state[:etag]
+        [304, { "etag" => state[:etag] }, nil]
       else
-        @last_status = 200
-        [200, { "etag" => @state[:etag], "content-type" => "application/json",
-                "last-modified" => "Fri, 04 Sep 2026 00:21:48 GMT" }, @state[:body]]
+        [200, { "etag" => state[:etag], "content-type" => "application/json",
+                "last-modified" => "Fri, 04 Sep 2026 00:21:48 GMT" }, state[:body]]
       end
-    when :rate_limited_with_details
-      @last_status = 429
-      [429, { "content-type" => "application/json" },
-       { "error" => { "code" => "rate_limited", "message" => "slow down",
-                      "details" => { "retry_after" => 30 } } }]
+    when 304
+      [304, { "etag" => state[:etag] }, nil]
     else
-      @last_status = @state[:status]
-      headers = { "content-type" => "application/json" }
-      headers["Retry-After"] = @state[:retry_after].to_s if @state[:retry_after]
-      [@state[:status], headers, { "error" => { "code" => "unavailable", "details" => {} } }]
+      [state[:status], { "content-type" => "application/json" },
+       { "error" => { "code" => "unavailable", "details" => {} } }]
     end
   end
 end

@@ -3,6 +3,7 @@
 require "json"
 require "net/http"
 require "openssl"
+require "timeout"
 require "uri"
 require_relative "errors"
 
@@ -57,8 +58,7 @@ module PromptOn
       @uri = URI.parse(config.api_url)
     end
 
-    # GET /prompts?environment=… with If-None-Match. The body is left as raw bytes: the ETag is
-    # a hash of them, so the disk cache stores exactly what the server sent.
+    # GET /prompts?environment=… with If-None-Match. Kept for explicit export and older callers.
     def get_snapshot(environment:, etag: nil, read_timeout: nil)
       request = Net::HTTP::Get.new(request_uri("/prompts", environment: environment))
       request["If-None-Match"] = etag if etag
@@ -67,6 +67,19 @@ module PromptOn
 
       # Only a 200 body is a snapshot; anything else is an error envelope worth parsing, because
       # that is where a Retry-After can hide.
+      Response.new(status: response.status, headers: response.headers, body: parse(response.body))
+    end
+
+    # GET /prompts/:key?environment=… with a prompt-specific ETag. The body is raw bytes so the
+    # disk cache can persist exactly the validated document received for this prompt.
+    def get_prompt(key, environment:, etag: nil, timeout: nil)
+      request = Net::HTTP::Get.new(
+        request_uri("/prompts/#{URI.encode_www_form_component(key)}", environment: environment)
+      )
+      request["If-None-Match"] = etag if etag
+      response = perform(request, read_timeout: timeout, total_timeout: timeout, parse_json: false)
+      return response if response.success?
+
       Response.new(status: response.status, headers: response.headers, body: parse(response.body))
     end
 
@@ -102,16 +115,22 @@ module PromptOn
       params.empty? ? uri : "#{uri}?#{URI.encode_www_form(params)}"
     end
 
-    def perform(request, read_timeout: nil, parse_json: true)
+    def perform(request, read_timeout: nil, total_timeout: nil, parse_json: true)
       request["Accept"] = "application/json"
       request["User-Agent"] = @config.user_agent
       request["Authorization"] = "Bearer #{@config.api_key}" if @config.api_key
 
-      response = start(read_timeout) { |http| http.request(request) }
+      response = if total_timeout
+                   Timeout.timeout(total_timeout, TransportError) do
+                     start(read_timeout) { |http| http.request(request) }
+                   end
+                 else
+                   start(read_timeout) { |http| http.request(request) }
+                 end
       body = response.body
       Response.new(status: response.code.to_i, headers: flatten_headers(response),
                    body: parse_json ? parse(body) : body)
-    rescue Timeout::Error => e
+    rescue Timeout::Error, TransportError => e
       raise TransportError, "PromptOn request timed out: #{e.class}"
     rescue SystemCallError, SocketError, IOError, OpenSSL::OpenSSLError, Net::HTTPBadResponse => e
       raise TransportError, "PromptOn request failed: #{e.class}: #{e.message}"
@@ -121,8 +140,10 @@ module PromptOn
       Net::HTTP.start(@uri.hostname, @uri.port,
                       use_ssl: @uri.scheme == "https",
                       open_timeout: @config.open_timeout,
-                      read_timeout: read_timeout || @config.read_timeout,
-                      &)
+                      read_timeout: read_timeout || @config.read_timeout) do |http|
+        http.max_retries = 0 if http.respond_to?(:max_retries=)
+        yield http
+      end
     end
 
     def parse(body)

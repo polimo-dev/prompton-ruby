@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0
+
+- Changed runtime config fetches to demand-driven prompt lookups. Client startup, readiness checks and idle periods no longer fetch remote config or start a config polling timer; a prompt is fetched only when `use_case(key)` needs that key.
+- Added per-prompt caching and singleflight behavior for config fetches. Each SDK instance keeps separate cache state per project, environment and prompt key; fresh remote values live for 10 seconds, failed attempts are also rate-limited for 10 seconds, and concurrent callers for the same key share one in-flight request.
+- Switched normal runtime config traffic to `GET /api/v1/prompts/:key?environment=...` with prompt-specific `If-None-Match`. Successful `200` and meaningful `304` responses refresh only that key, while other cached prompts retain their own ETags and timestamps.
+- Added a fixed 1-second total config fetch budget with no HTTP retry. Transport errors, HTTP errors, invalid documents, scope mismatches and timeouts serve the last valid cached value, even when expired; cold failures raise `PromptOn::NotReadyError`. Legacy `cache_ttl:` and `config_fetch_timeout:` options are accepted for compatibility but do not change runtime config fetch timing.
+- Kept disk and bundle fallbacks, but local documents no longer count as fresh remote validation after process startup. Disk sidecars preserve prompt-specific raw documents so restarts keep each prompt's immutable model/version view even when the merged document has shared ids. `poll:` is accepted for compatibility and ignored for config fetching.
+
 ## 0.4.1
 
 - Fixed runtime compatibility with the current PromptOn prompt API: snapshot fetches now use `GET /api/v1/prompts`, remote render uses `POST /api/v1/prompts/{key}/render` with `template`, and monitoring logs use canonical `prompt_key`/`template` fields.

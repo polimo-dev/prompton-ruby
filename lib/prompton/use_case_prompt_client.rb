@@ -130,7 +130,7 @@ module PromptOn
     end
 
     def write_cache(key, body)
-      @mutex.synchronize { @cache[key] = CacheEntry.new(body: body, expires_at: now + @config.cache_ttl) }
+      @mutex.synchronize { @cache[key] = CacheEntry.new(body: body, expires_at: now + @config.prompt_cache_ttl) }
     end
 
     def now

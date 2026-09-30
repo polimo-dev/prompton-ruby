@@ -18,10 +18,12 @@ module PromptOn
     DEFAULT_HOST = "https://app.prompton.ai"
     API_PATH = "/api/v1"
     DEFAULT_ENVIRONMENT = "production"
+    CONFIG_CACHE_TTL = 10.0
+    CONFIG_FETCH_TIMEOUT = 1.0
     MODES = %i[live test offline].freeze
 
-    attr_reader :host, :api_url, :api_key, :environment, :project, :cache_ttl, :max_backoff,
-                :open_timeout, :read_timeout, :disk_cache_path, :bundle_path, :mode, :poll,
+    attr_reader :host, :api_url, :api_key, :environment, :project, :cache_ttl, :prompt_cache_ttl, :max_backoff,
+                :config_fetch_timeout, :open_timeout, :read_timeout, :disk_cache_path, :bundle_path, :mode, :poll,
                 :hash_end_user, :redact, :logger, :user_agent, :flush_interval, :flush_size,
                 :flush_bytes, :max_buffer, :max_send_attempts, :payload_defaults, :flush_on_exit
 
@@ -34,12 +36,14 @@ module PromptOn
       @mode = normalize_mode(options.fetch(:mode, :live))
       @logger = logger_for(options)
 
-      @cache_ttl = positive_number(options.fetch(:cache_ttl, 10.0), :cache_ttl)
+      @cache_ttl = CONFIG_CACHE_TTL
+      @prompt_cache_ttl = positive_number_or_default(options.fetch(:cache_ttl, CONFIG_CACHE_TTL), CONFIG_CACHE_TTL)
       @max_backoff = positive_number(options.fetch(:max_backoff, 300.0), :max_backoff)
+      @config_fetch_timeout = CONFIG_FETCH_TIMEOUT
       timeout = positive_number(options.fetch(:timeout, 5.0), :timeout)
       @open_timeout = positive_number(options.fetch(:open_timeout, timeout), :open_timeout)
       @read_timeout = positive_number(options.fetch(:read_timeout, timeout), :read_timeout)
-      @poll = options.fetch(:poll, true) == true && @mode == :live
+      @poll = false
 
       @disk_cache_path = resolve_disk_cache(options.fetch(:disk_cache, true))
       @bundle_path = presence(pick(options, :bundle, "PTN_BUNDLE"))
@@ -79,7 +83,8 @@ module PromptOn
 
     def to_h
       { host: host, api_key: api_key, environment: environment, project: project, mode: mode,
-        logger: logger, cache_ttl: cache_ttl, max_backoff: max_backoff,
+        logger: logger, cache_ttl: prompt_cache_ttl, max_backoff: max_backoff,
+        config_fetch_timeout: config_fetch_timeout,
         open_timeout: open_timeout, read_timeout: read_timeout, poll: poll,
         disk_cache: disk_cache_path || false, bundle: bundle_path, hash_end_user: hash_end_user,
         redact: redact, user_agent: user_agent, flush_interval: flush_interval,
@@ -153,6 +158,12 @@ module PromptOn
       raise ConfigurationError, "#{name} must be a positive number" unless value.is_a?(Numeric) && value.positive?
 
       value.to_f
+    end
+
+    def positive_number_or_default(value, default)
+      return value.to_f if value.is_a?(Numeric) && value.positive?
+
+      default
     end
 
     def positive_integer(value, name)

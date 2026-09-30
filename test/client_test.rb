@@ -119,7 +119,7 @@ class ClientTest < Minitest::Test
 
     assert_equal "greeting", logged["prompt_key"]
     assert_equal "ko", logged["template"]
-    assert_equal 3, logged["deployment_revision"]
+    assert_equal "v2026.09.30-3", logged["deployment_revision"]
     assert_equal "0198f2a1-0000-7000-8000-00000000a002", logged["prompt_version_id"]
     assert_equal "manual", logged["source"]
     assert_equal({ "temperature" => 0.2, "max_tokens" => 512 }, logged["params"])

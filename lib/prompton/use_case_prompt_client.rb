@@ -105,11 +105,16 @@ module PromptOn
     def to_use_case_evidence(body, requested_key)
       deployment = body["deployment"] || {}
       version = body["prompt_version"] || {}
+      revision = deployment["revision"]
+      unless revision.nil? || revision.is_a?(String)
+        raise InvalidUseCaseDocumentError, "deployment revision must be a string like v2026.09.30-1"
+      end
 
       UseCaseEvidence.new(
         use_case: body["key"] || requested_key, kind: body["kind"], prompt: body["template"] || body["prompt"],
         prompt_names: body["template_names"] || body["prompt_names"] || [],
-        deployment_id: deployment["id"], deployment_revision: deployment["revision"],
+        deployment_id: deployment["id"],
+        deployment_revision: revision,
         prompt_version_id: version["id"], prompt_version_number: version["number"],
         engine: body["engine"] || "liquid", model: body["model"], model_id: body["model_id"],
         provider: body["provider"], params: body["params"] || {},

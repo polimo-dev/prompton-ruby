@@ -182,7 +182,7 @@ module PromptOn
         acc[key] = Deployment.new(
           id: string_or_nil(value["id"]),
           use_case_key: string_or_nil(value["use_case_key"]) || string_or_nil(value["prompt_key"]) || key,
-          revision: integer_or(value["revision"], nil), model_id: string_or_nil(value["model_id"]),
+          revision: revision_or_nil(value["revision"]), model_id: string_or_nil(value["model_id"]),
           params: Params.stringify_keys(value["params"]),
           provider_options: Params.stringify_keys(value["provider_options"]),
           prompt_pins: decode_prompt_pins(value["prompt_pins"] || value["template_pins"], key),
@@ -290,6 +290,13 @@ module PromptOn
       when String then value
       when Numeric, Symbol then value.to_s
       end
+    end
+
+    def revision_or_nil(value)
+      return nil if value.nil?
+      return value if value.is_a?(String)
+
+      raise InvalidUseCaseDocumentError, "deployment revision must be a string like v2026.09.30-1"
     end
 
     def integer_or(value, default)

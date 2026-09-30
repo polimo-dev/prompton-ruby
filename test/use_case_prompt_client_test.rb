@@ -142,7 +142,7 @@ class UseCasePromptClientTest < Minitest::Test
 
   def resolve_body
     { "key" => "greeting", "kind" => "chat",
-      "deployment" => { "id" => "0198f2a1-0000-7000-8000-00000000d001", "revision" => 3 },
+      "deployment" => { "id" => "0198f2a1-0000-7000-8000-00000000d001", "revision" => "v2026.09.30-3" },
       "template" => "default", "template_names" => %w[default ko],
       "model_id" => "0198f2a1-0000-7000-8000-00000000e001", "model" => "openai/gpt-4o-mini",
       "provider" => "openrouter", "params" => { "temperature" => 0.2 },
@@ -151,5 +151,15 @@ class UseCasePromptClientTest < Minitest::Test
       "messages" => [{ "role" => "system", "content" => "You greet." },
                      { "role" => "user", "content" => "Say hello to {{ name }}." }],
       "warnings" => [], "etag" => "sha256-abc" }
+  end
+
+  def test_numeric_deployment_revision_in_prompt_render_response_is_rejected
+    @body = resolve_body
+    @body["deployment"]["revision"] = 1
+
+    error = assert_raises(PromptOn::InvalidUseCaseDocumentError) do
+      build_client.use_case("greeting")
+    end
+    assert_match(/revision must be a string/, error.message)
   end
 end

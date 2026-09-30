@@ -76,7 +76,7 @@ module PromptOnTest
       },
       "deployments" => {
         "greeting" => {
-          "id" => "0198f2a1-0000-7000-8000-00000000d001", "revision" => 3,
+          "id" => "0198f2a1-0000-7000-8000-00000000d001", "revision" => "v2026.09.30-3",
           "model_id" => "0198f2a1-0000-7000-8000-00000000e001",
           "params" => { "temperature" => temperature },
           "provider_options" => { "allow_fallbacks" => true, "sort" => nil },
@@ -84,13 +84,13 @@ module PromptOnTest
                              "ko" => "0198f2a1-0000-7000-8000-00000000a002" }
         },
         "summarize" => {
-          "id" => "0198f2a1-0000-7000-8000-00000000d002", "revision" => 1,
+          "id" => "0198f2a1-0000-7000-8000-00000000d002", "revision" => "v2026.09.30-1",
           "model_id" => "0198f2a1-0000-7000-8000-00000000e001", "params" => {},
           "provider_options" => {},
           "prompt_pins" => { "default" => "0198f2a1-0000-7000-8000-00000000a003" }
         },
         "embed" => {
-          "id" => "0198f2a1-0000-7000-8000-00000000d003", "revision" => 2,
+          "id" => "0198f2a1-0000-7000-8000-00000000d003", "revision" => "v2026.09.30-2",
           "model_id" => "0198f2a1-0000-7000-8000-00000000e002",
           "params" => { "dimensions" => 256 }, "provider_options" => {}, "prompt_pins" => {}
         }

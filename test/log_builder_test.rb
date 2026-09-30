@@ -22,7 +22,7 @@ class LogBuilderTest < Minitest::Test
     assert_equal "openrouter", record["provider"]
     assert_equal "OpenAI", record["upstream_provider"]
     assert_equal "0198f2a1-0000-7000-8000-00000000d001", record["deployment_id"]
-    assert_equal 3, record["deployment_revision"]
+    assert_equal "v2026.09.30-3", record["deployment_revision"]
     assert_equal "default", record["template"]
     assert_equal "0198f2a1-0000-7000-8000-00000000a001", record["prompt_version_id"]
     assert_equal "remote", record["source"]

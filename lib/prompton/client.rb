@@ -280,7 +280,7 @@ module PromptOn
     # test can stub exactly the call site it exercises.
     def stub(use_case, model:, messages: nil, text: nil, kind: "chat", prompt: "default",
              params: {}, provider_options: {}, default_params: {}, provider: "openrouter",
-             payload_policy: nil, engine: "liquid", revision: 1)
+             payload_policy: nil, engine: "liquid", revision: "v2026.09.30-1")
       key = use_case.to_s
       document = @stub_document || base_stub_document
       version_id = stub_id("version", key, prompt)

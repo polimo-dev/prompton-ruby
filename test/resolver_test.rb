@@ -98,6 +98,16 @@ class ResolverTest < Minitest::Test
     end
   end
 
+  def test_deployment_revision_must_be_a_string
+    document = snapshot_document
+    document["deployments"]["greeting"]["revision"] = 1
+
+    error = assert_raises(PromptOn::InvalidUseCaseDocumentError) do
+      PromptOn::UseCaseDocument.from_hash(document)
+    end
+    assert_match(/revision must be a string/, error.message)
+  end
+
   def test_prompt_names_lists_what_resolve_accepts
     assert_equal %w[default ko], PromptOn::Resolver.prompt_names(@snapshot, "greeting")
     assert_empty PromptOn::Resolver.prompt_names(@snapshot, "draft")

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Retired message-slot expansion. A prompt message with `{"type" => "slot"}` now raises
+  `Message slots are not supported; compose conversation history in app code.` even when variables
+  include a matching list; `{{ history }}` remains an ordinary template variable.
+- Updated examples and tests so apps compose PromptOn-managed messages, app-owned conversation
+  history and the current user message before calling the provider, then pass those final messages
+  to `track(input_messages:)`.
+
 ## 0.5.0
 
 - Changed runtime config fetches to demand-driven prompt lookups. Client startup, readiness checks and idle periods no longer fetch remote config or start a config polling timer; a prompt is fetched only when `use_case(key)` needs that key.

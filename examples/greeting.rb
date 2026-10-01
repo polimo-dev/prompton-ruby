@@ -17,7 +17,11 @@ prompton = PromptOn::Client.new(
 
 use_case = prompton.use_case("greeting", prompt: ENV.fetch("PROMPT", "default"))
 variables = { name: ENV.fetch("NAME", "Ada") }
-messages = use_case.messages(variables)
+managed_messages = use_case.messages(variables)
+app_history = [{ "role" => "assistant", "content" => "Ready to greet." }]
+messages = managed_messages +
+           app_history +
+           [{ "role" => "user", "content" => "Say hello to #{variables[:name]}." }]
 
 puts "model:    #{use_case.model} (#{use_case.provider})"
 puts "pin:      deployment #{use_case.deployment_id} revision #{use_case.deployment_revision}"

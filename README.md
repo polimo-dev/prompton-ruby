@@ -37,12 +37,20 @@ require "prompton"
 PromptOn.configure(api_key: ENV.fetch("PTN_API_KEY"))            # ptn_<project>_… , a project key
 
 use_case = PromptOn.use_case("greeting", prompt: "ko")            # from the cached use-case document
-messages = use_case.messages(name: "Ada")                         # your variables, rendered locally
+managed_messages = use_case.messages(style: "warm")               # PromptOn-managed prompt messages
+messages = managed_messages +
+           conversation_history +                                # your app's prior messages
+           [{ "role" => "user", "content" => "Say hello to Ada." }]
 
-use_case.track(variables: { name: "Ada" }, input_messages: messages) do
+use_case.track(variables: { style: "warm" }, input_messages: messages) do
   openai.chat(model: use_case.model, messages: messages, **use_case.params)       # your key, your client
 end
 ```
+
+PromptOn-managed messages are the prompt config your team edits in PromptOn, usually system or
+developer instructions. Conversation history and the current user message stay in your app and are
+added immediately before the provider request. Pass that final provider input as `input_messages`
+so monitoring logs show what the model actually received.
 
 `use_case` uses the in-memory config when it is fresh. If that prompt key has no fresh remote
 config, the SDK fetches that one key from PromptOn before returning the provider settings. `track`

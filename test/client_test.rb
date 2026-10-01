@@ -165,11 +165,19 @@ class ClientTest < Minitest::Test
     client = build_client(mode: :test)
     client.put_use_case_document(snapshot_document)
     resolution = client.use_case("greeting")
+    variables = { name: "Ada" }
+    managed_messages = resolution.messages(variables)
+    app_history = [{ "role" => "assistant", "content" => "Previous answer." }]
+    input_messages = [
+      managed_messages[0],
+      *app_history,
+      { "role" => "user", "content" => "Say hello to Ada." }
+    ]
     result = { content: "Hello", finish_reason: "stop", usage: { input_tokens: 38, output_tokens: 9 },
                cost_usd: 0.000112, cost_source: "provider", model_used: "openai/gpt-4o-mini" }
 
-    returned = resolution.track(variables: { name: "Ada" },
-                                input_messages: resolution.messages(name: "Ada"),
+    returned = resolution.track(variables: variables,
+                                input_messages: input_messages,
                                 end_user_ref: "u1", trace_id: "job:1", sequence: 2,
                                 context: { plan: "pro" }, metadata: { job: 7 }) do
       result
@@ -185,7 +193,7 @@ class ClientTest < Minitest::Test
     assert_equal "job:1", logged["trace_id"]
     assert_equal({ "plan" => "pro" }, logged["context"])
     assert_equal({ "job" => 7 }, logged["metadata"])
-    assert_equal "Say hello to Ada.", logged.dig("input", "messages").last["content"]
+    assert_equal input_messages, logged.dig("input", "messages")
   end
 
   def test_messages_prompt_selection_is_used_by_later_track_evidence

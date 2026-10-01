@@ -45,6 +45,7 @@ module PromptOn
     TOKEN_RE = /\{\{(.*?)\}\}|\{%(.*?)%\}/m
     WHITESPACE_MARKERS = /\{\{-|\{%-|-\}\}|-%\}/
     TAG_WORD_RE = /\{%-?\s*([A-Za-z_][A-Za-z0-9_]*)/
+    MESSAGE_SLOT_ERROR = "Message slots are not supported; compose conversation history in app code."
 
     module_function
 
@@ -70,32 +71,18 @@ module PromptOn
       Renderer.new(parse(source), normalize_variables(variables)).render
     end
 
-    # Renders the +content+ of each message in a list of <tt>{"role" =>, "content" =>}</tt>
-    # hashes. Other keys are preserved as they are.
+    # Renders the +content+ of each message and preserves provider-native fields as they are.
     def render_messages(messages, variables, engine: "liquid")
       vars = normalize_variables(variables)
-      Array(messages).flat_map do |message|
-        if message["type"] == "slot" || message[:type] == "slot"
-          name = message["name"] || message[:name]
-          raise TemplateRenderError, "message slot requires a name" unless name.is_a?(String)
-          raise MissingVariableError, name unless vars.key?(name)
+      Array(messages).map do |message|
+        raise TemplateRenderError, MESSAGE_SLOT_ERROR if message["type"] == "slot" || message[:type] == "slot"
 
-          value = vars[name]
-          raise TemplateRenderError, "message slot #{name} must be a list" unless value.is_a?(Array)
+        content = message.key?("content") ? message["content"] : message[:content]
+        next message.dup unless content.is_a?(String)
 
-          value.map do |entry|
-            raise TemplateRenderError, "message slot #{name} must contain objects" unless entry.is_a?(Hash)
-
-            entry.dup
-          end
-        else
-          content = message.key?("content") ? message["content"] : message[:content]
-          next message.dup unless content.is_a?(String)
-
-          symbol_key = message.key?(:content) && !message.key?("content")
-          rendered = render(content, vars, engine: engine)
-          message.merge(symbol_key ? { content: rendered } : { "content" => rendered })
-        end
+        symbol_key = message.key?(:content) && !message.key?("content")
+        rendered = render(content, vars, engine: engine)
+        message.merge(symbol_key ? { content: rendered } : { "content" => rendered })
       end
     end
 

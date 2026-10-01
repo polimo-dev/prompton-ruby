@@ -20,6 +20,28 @@ class TemplateTest < Minitest::Test
     assert_equal "Hi {{ name }}.", messages.last["content"], "the input must not be mutated"
   end
 
+  def test_history_is_an_ordinary_variable_name
+    messages = [{ "role" => "system", "content" => "Summarize {{ history }}." }]
+
+    assert_equal [{ "role" => "system", "content" => "Summarize past turns." }],
+                 PromptOn::Template.render_messages(messages, { history: "past turns" })
+  end
+
+  def test_message_slots_are_rejected_before_variable_lookup
+    %w[liquid raw].each do |engine|
+      error = assert_raises(PromptOn::TemplateRenderError) do
+        PromptOn::Template.render_messages(
+          [{ "type" => "slot", "name" => "history" }],
+          { history: [{ "role" => "user", "content" => "past" }] },
+          engine: engine
+        )
+      end
+
+      assert_equal "Message slots are not supported; compose conversation history in app code.",
+                   error.message
+    end
+  end
+
   def test_symbol_keys_and_nested_symbol_keys_are_accepted
     assert_equal "Ada", PromptOn::Template.render("{{ user.name }}", { user: { name: "Ada" } })
   end

@@ -27,7 +27,7 @@ Not published to RubyGems yet, so depend on the repository:
 gem "prompton-sdk", github: "polimo-dev/prompton-ruby"
 ```
 
-Once published, the line becomes `gem "prompton-sdk", "~> 0.2"`. Requires Ruby 3.2 or newer.
+Once published, the line becomes `gem "prompton-sdk", "~> 0.5"`. Requires Ruby 3.2 or newer.
 
 ## Quick start
 

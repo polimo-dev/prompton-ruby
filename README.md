@@ -260,6 +260,13 @@ it carries in `result:` (usage, partial output) is kept, which is what makes a p
 still readable as a quality signal. An exception is logged as an error of kind `app` and then
 re-raised unchanged.
 
+Generation logs with `status: "error"`, `error.kind: "transport"` and an exact error message of
+`%Req.TransportError{reason: :closed}` or
+`failed to send request: %Req.TransportError{reason: :closed}` are omitted before payload policy,
+redaction, test capture, or buffering. These are closed connection failures normally handled by the
+app's provider retry layer. `track` still returns or re-raises the original provider result, and
+other transport errors remain visible.
+
 ```ruby
 PromptOn::Failure.new(kind: "rate_limited", status: 429, message: body)
 PromptOn::Failure.new(kind: "parse", message: e.message,
@@ -346,7 +353,7 @@ and `prompt_names`), `MissingVariableError` (carries `variable`), `TemplateSynta
 
 ## Trace events
 
-Use `log_events` when your app has already observed tool calls or completion events and wants them available for eval evidence. The SDK does not execute tools and does not infer these events from provider requests. In live mode it immediately posts `{"logs": [], "events": [...]}` to the logs endpoint; in test mode the submitted events are available on `PromptOn.logged_events`.
+Use `log_events` when your app has already observed tool calls or completion events and wants them available for eval evidence. The SDK does not execute tools and does not infer these events from provider requests. In live mode it immediately posts `{"logs": [], "events": [...]}` to the logs endpoint; in test mode the submitted events are available on `PromptOn.logged_events`. Error completion events whose `completion_output` is exactly one of the closed Req transport messages above, including the `failed to call LLM: ` prefix, are omitted after validation. Other events keep their IDs and order; if every event is omitted, no request is sent and the result reports zero accepted events.
 
 ```ruby
 PromptOn.log_events([{

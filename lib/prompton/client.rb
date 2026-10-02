@@ -33,6 +33,13 @@ module PromptOn
   # #close when you are done with one.
   class Client
     REQUIRED_RECORD_FIELDS = %w[prompt_key model status started_at].freeze
+    CLOSED_TRANSPORT_MESSAGES = [
+      "%Req.TransportError{reason: :closed}",
+      "failed to send request: %Req.TransportError{reason: :closed}"
+    ].freeze
+    CLOSED_TRANSPORT_COMPLETION_OUTPUTS =
+      (CLOSED_TRANSPORT_MESSAGES +
+       ["failed to call LLM: failed to send request: %Req.TransportError{reason: :closed}"]).freeze
 
     # Ruby cannot unregister an at_exit block, so there is exactly one for the whole process and
     # it drains a registry of clients held weakly: a client that goes out of scope is collected
@@ -180,6 +187,7 @@ module PromptOn
     def log(record = nil, use_case_evidence: nil, environment: nil, **fields)
       prepared = prepare_record(Params.deep_stringify(record || {}).merge(Params.deep_stringify(fields)),
                                 unwrap_evidence(use_case_evidence))
+      return nil if prepared.nil?
 
       if @config.test?
         @capture_mutex.synchronize { @captured << prepared }
@@ -197,11 +205,12 @@ module PromptOn
     # The SDK never infers tool execution from model requests. Pass the tool/completion events
     # your app observed; each event must already carry its stable event_id and trace_id.
     def log_events(events, environment: nil)
-      prepared = prepare_trace_events(events)
+      prepared = prepare_trace_events(events).reject { |event| closed_transport_completion?(event) }
       if @config.test?
         @capture_mutex.synchronize { @captured_events.concat(prepared) }
         return { accepted: prepared.length, duplicates: 0, rejected: [] }
       end
+      return { accepted: 0, duplicates: 0, rejected: [] } if prepared.empty?
       return { accepted: 0, duplicates: 0, rejected: [] } unless @config.remote?
 
       response = @http.post_trace_events(prepared, environment: environment || @config.environment)
@@ -411,7 +420,23 @@ module PromptOn
         raise InvalidRecordError, field if prepared[field].nil?
       end
 
+      return nil if closed_transport_log?(prepared)
+
       Payload.apply(prepared, policy_for(prepared, evidence), **payload_config)
+    end
+
+    def closed_transport_log?(record)
+      error = record["error"]
+      error.is_a?(Hash) &&
+        record["status"] == "error" &&
+        error["kind"] == "transport" &&
+        CLOSED_TRANSPORT_MESSAGES.include?(error["message"])
+    end
+
+    def closed_transport_completion?(event)
+      event["event_kind"] == "completion" &&
+        event["status"] == "error" &&
+        CLOSED_TRANSPORT_COMPLETION_OUTPUTS.include?(event["completion_output"])
     end
 
     def merge_use_case(record, evidence)

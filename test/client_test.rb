@@ -159,6 +159,38 @@ class ClientTest < Minitest::Test
     assert_equal({ "redacted" => true }, logged["metadata"])
   end
 
+  def test_closed_req_transport_errors_are_not_logged_or_redacted
+    seen = []
+    client = build_client(mode: :test, redact: lambda { |gen|
+      seen << gen
+      gen
+    })
+    client.put_use_case_document(snapshot_document)
+    failure = PromptOn::Failure.new(
+      kind: "transport",
+      message: "failed to send request: %Req.TransportError{reason: :closed}"
+    )
+
+    returned = client.use_case("greeting").track { failure }
+
+    assert_same failure, returned
+    assert_empty client.logged
+    assert_empty seen
+  end
+
+  def test_other_transport_errors_are_still_logged
+    client = build_client(mode: :test)
+    client.put_use_case_document(snapshot_document)
+
+    client.use_case("greeting").track do
+      PromptOn::Failure.new(kind: "transport", message: "connection refused")
+    end
+
+    logged = client.logged.first
+    assert_equal "error", logged["status"]
+    assert_equal({ "kind" => "transport", "message" => "connection refused" }, logged["error"])
+  end
+
   # --- track -----------------------------------------------------
 
   def test_track_times_the_call_and_returns_the_block_value_unchanged
@@ -335,6 +367,42 @@ class ClientTest < Minitest::Test
 
     assert_equal({ accepted: 2, duplicates: 0, rejected: [] }, client.log_events([trace_event]))
     assert_equal 1, server.request_count
+  ensure
+    server&.stop
+  end
+
+  def test_log_events_filters_closed_transport_completions_without_reordering_survivors
+    client = build_client(mode: :test)
+    tool_event = trace_event
+    closed_event = {
+      "event_id" => "evt-closed", "trace_id" => "trace-1", "event_kind" => "completion",
+      "status" => "error", "observed_at" => "2026-09-28T00:00:01.000Z",
+      "completion_output" =>
+        "failed to call LLM: failed to send request: %Req.TransportError{reason: :closed}"
+    }
+    other_error = closed_event.merge("event_id" => "evt-timeout",
+                                     "completion_output" => "request timed out")
+
+    assert_equal({ accepted: 2, duplicates: 0, rejected: [] },
+                 client.log_events([tool_event, closed_event, other_error]))
+
+    event_ids = client.logged_events.map { |event| event["event_id"] }
+    assert_equal %w[evt-1 evt-timeout], event_ids
+  end
+
+  def test_log_events_sends_no_request_when_every_event_is_filtered
+    server = PromptOnTest::StubServer.new do |_request|
+      flunk "closed transport completion events should not be posted"
+    end
+    client = build_client(mode: :live, host: server.url)
+    event = {
+      "event_id" => "evt-closed", "trace_id" => "trace-1", "event_kind" => "completion",
+      "status" => "error", "observed_at" => "2026-09-28T00:00:01.000Z",
+      "completion_output" => "%Req.TransportError{reason: :closed}"
+    }
+
+    assert_equal({ accepted: 0, duplicates: 0, rejected: [] }, client.log_events([event]))
+    assert_equal 0, server.request_count
   ensure
     server&.stop
   end

@@ -5,7 +5,7 @@ require "time"
 require "json"
 require "securerandom"
 require_relative "errors"
-require_relative "use_case_document"
+require_relative "prompt_document"
 
 module PromptOn
   # The three tiers a snapshot can come from: memory, one local file, and a file bundled into the
@@ -82,7 +82,7 @@ module PromptOn
 
     # Installs a document fetched from the server and mirrors it to the disk cache.
     def install_remote(body, etag: nil, last_modified: nil, persist: true)
-      data = UseCaseDocument.parse(body)
+      data = PromptDocument.parse(body)
       guard!(data)
       now = Time.now
       entry = Entry.new(data: data, etag: etag, last_modified: last_modified, source: "remote",
@@ -99,7 +99,7 @@ module PromptOn
 
     def install_prompt_remote(prompt_key, body, etag: nil, last_modified: nil, persist: true, deadline_expired: nil)
       key = prompt_key.to_s
-      data = UseCaseDocument.parse(body)
+      data = PromptDocument.parse(body)
       guard!(data)
       guard_prompt!(data, key)
       raise TransportError, "config fetch exceeded deadline before cache install" if deadline_expired&.call
@@ -127,7 +127,7 @@ module PromptOn
     # Installs a document the caller already holds — test mode, or a manual override.
     def install_document(document, source: "manual", etag: "manual")
       body = document.is_a?(String) ? document : JSON.generate(document)
-      data = UseCaseDocument.parse(body)
+      data = PromptDocument.parse(body)
       entry = Entry.new(data: data, etag: etag, last_modified: nil, source: source,
                         fetched_at: Time.now, stale_since: nil, body: body, prompt_meta: {})
       @mutex.synchronize do
@@ -242,19 +242,19 @@ module PromptOn
 
     def guard!(data)
       if data.environment && data.environment != @config.environment
-        raise InvalidUseCaseDocumentError,
+        raise InvalidPromptDocumentError,
               "snapshot is for environment #{data.environment.inspect}, " \
               "this process reads #{@config.environment.inspect}"
       end
       return unless @config.project && data.project && data.project != @config.project
 
-      raise InvalidUseCaseDocumentError,
+      raise InvalidPromptDocumentError,
             "snapshot is for project #{data.project.inspect}, this process reads #{@config.project.inspect}"
     end
 
     def read_file(path, source)
       body = File.read(path)
-      data = UseCaseDocument.parse(body)
+      data = PromptDocument.parse(body)
       guard!(data)
       meta = read_meta(path)
       entry = Entry.new(data: data, etag: meta["etag"], last_modified: meta["last_modified"], source: source,
@@ -264,7 +264,7 @@ module PromptOn
       entry
     rescue Errno::ENOENT
       nil
-    rescue InvalidUseCaseDocumentError => e
+    rescue InvalidPromptDocumentError => e
       @config.logger.warn("[PromptOn] ignoring #{source} snapshot #{path}: #{e.message}")
       nil
     rescue SystemCallError, IOError => e
@@ -299,7 +299,7 @@ module PromptOn
     end
 
     def guard_prompt!(data, key)
-      raise InvalidUseCaseDocumentError, "prompt document did not include #{key.inspect}" unless data.use_case(key)
+      raise InvalidPromptDocumentError, "prompt document did not include #{key.inspect}" unless data.prompt(key)
     end
 
     def json_body_string(body)
@@ -309,7 +309,7 @@ module PromptOn
     end
 
     def rebuild_prompt_entries(data, prompt_meta, source, entry)
-      @prompt_entries = data.use_case_keys.to_h do |key|
+      @prompt_entries = data.prompt_keys.to_h do |key|
         meta = prompt_meta[key] || {}
         prompt_data = isolate_document(data, key, meta[:body])
         [key, PromptEntry.new(data: prompt_data, etag: meta[:etag] || entry.etag,
@@ -322,7 +322,7 @@ module PromptOn
     end
 
     def isolate_document(data, key, body = nil)
-      document = body ? UseCaseDocument.parse(body) : merge_documents(nil, data, key)
+      document = body ? PromptDocument.parse(body) : merge_documents(nil, data, key)
       guard!(document)
       guard_prompt!(document, key)
       document
@@ -345,7 +345,7 @@ module PromptOn
         merged[collection] ||= {}
         merged[collection].merge!(incoming_hash[collection] || {})
       end
-      UseCaseDocument.from_hash(merged)
+      PromptDocument.from_hash(merged)
     end
 
     def base_document(data)
@@ -363,10 +363,10 @@ module PromptOn
         "schema_version" => 1,
         "project" => data.project,
         "environment" => data.environment,
-        "prompts" => data.use_cases.transform_values do |use_case|
-          { "kind" => use_case.kind, "variables" => use_case.variables,
-            "default_params" => use_case.default_params,
-            "payload_policy" => payload_policy_to_h(use_case.payload_policy) }.compact
+        "prompts" => data.prompts.transform_values do |prompt|
+          { "kind" => prompt.kind, "variables" => prompt.variables,
+            "default_params" => prompt.default_params,
+            "payload_policy" => payload_policy_to_h(prompt.payload_policy) }.compact
         end,
         "deployments" => data.deployments.transform_values do |deployment|
           { "revision" => deployment.revision, "provider" => deployment.provider,
@@ -398,7 +398,7 @@ module PromptOn
     end
 
     def local_prompt_meta(data, source, entry)
-      data.use_case_keys.to_h do |key|
+      data.prompt_keys.to_h do |key|
         [key, { etag: entry.etag, last_modified: entry.last_modified, source: source,
                 fetched_at: entry.fetched_at, stale_since: source == "remote" ? nil : Time.now }]
       end
@@ -408,7 +408,7 @@ module PromptOn
       raw = meta["prompts"]
       return local_prompt_meta(data, source, entry) unless raw.is_a?(Hash)
 
-      data.use_case_keys.to_h do |key|
+      data.prompt_keys.to_h do |key|
         prompt = raw[key] || {}
         body = prompt["body"].is_a?(String) ? prompt["body"] : nil
         [key, { etag: prompt["etag"] || entry.etag,

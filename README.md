@@ -3,19 +3,19 @@
 The official Ruby SDK for [PromptOn](https://app.prompton.ai), the control plane for your app's
 LLM prompts.
 
-PromptOn holds one **pin** per use case and environment: a prompt version, one model, and its
-params. Your app fetches a **use-case document** of those pins, renders the pinned prompt with this call's
+PromptOn holds one **pin** per prompt and environment: a prompt version, one model, and its
+params. Your app fetches a **prompt document** of those pins, renders the pinned prompt with this call's
 variables, and calls the provider **itself, with its own key and its own HTTP client**. After each
 call it sends a **monitoring log** back in a batch.
 
 PromptOn is config-fetch, **not a proxy**. It is never in the request path, so a PromptOn outage
-costs you nothing but fresher config: your app keeps running on the last use-case document it received.
+costs you nothing but fresher config: your app keeps running on the last prompt document it received.
 This SDK is thin by design — no runtime dependencies, `Net::HTTP` and the standard library only.
 
 ```
-use_case("greeting") ───────────────▶ UseCase{model, params, provider_options, …}
-use_case.messages(name: "Ada")     ──▶ the messages you send to your provider
-use_case.track { … }               ──▶ the provider call, timed and logged in the background
+prompt("greeting") ───────────────▶ Prompt{model, params, provider_options, …}
+prompt.messages(name: "Ada")     ──▶ the messages you send to your provider
+prompt.track { … }               ──▶ the provider call, timed and logged in the background
 ```
 
 ## Install
@@ -36,14 +36,14 @@ require "prompton"
 
 PromptOn.configure(api_key: ENV.fetch("PTN_API_KEY"))            # ptn_<project>_… , a project key
 
-use_case = PromptOn.use_case("greeting")                          # from the cached use-case document
-managed_messages = use_case.messages(style: "warm")               # PromptOn-managed prompt messages
+prompt = PromptOn.prompt("greeting")                          # from the cached prompt document
+managed_messages = prompt.messages(style: "warm")               # PromptOn-managed prompt messages
 messages = managed_messages +
            conversation_history +                                # your app's prior messages
            [{ "role" => "user", "content" => "Say hello to Ada." }]
 
-use_case.track(variables: { style: "warm" }, input_messages: messages) do
-  openai.chat(model: use_case.model, messages: messages, **use_case.params)       # your key, your client
+prompt.track(variables: { style: "warm" }, input_messages: messages) do
+  openai.chat(model: prompt.model, messages: messages, **prompt.params)       # your key, your client
 end
 ```
 
@@ -52,12 +52,12 @@ developer instructions. Conversation history and the current user message stay i
 added immediately before the provider request. Pass that final provider input as `input_messages`
 so monitoring logs show what the model actually received.
 
-`use_case` uses the in-memory config when it is fresh. If that prompt key has no fresh remote
+`prompt` uses the in-memory config when it is fresh. If that prompt key has no fresh remote
 config, the SDK fetches that one key from PromptOn before returning the provider settings. `track`
 times the block, builds the monitoring log and queues it; it returns whatever your block returned,
 and re-raises whatever your block raised. There is a runnable version in
 [`examples/greeting.rb`](examples/greeting.rb), which works with no server at all because it ships
-a bundled use-case document.
+a bundled prompt document.
 
 Prefer an explicit object over the module-level default? `PromptOn::Client.new(...)` gives you one,
 and you can hold as many as you like.
@@ -80,7 +80,7 @@ set.
 | `timeout` | | `5.0` | Seconds; `open_timeout` and `read_timeout` override it separately |
 | `poll` | | `true` | Accepted for compatibility; runtime config fetching is always demand-driven and starts no poller |
 | `disk_cache` | | `true` | `true` for the OS cache directory, a path, or `false` |
-| `bundle` | `PTN_BUNDLE` | none | Path to a use-case document committed into the app |
+| `bundle` | `PTN_BUNDLE` | none | Path to a prompt document committed into the app |
 | `mode` | | `:live` | `:live`, `:test` (no HTTP, logs captured) or `:offline` (disk/bundle only) |
 | `hash_end_user` | | `false` | Send `sha256(end_user_ref)` instead of the raw reference |
 | `redact` | | none | `->(record) { record }`, applied to every log record last |
@@ -91,16 +91,16 @@ set.
 | `max_send_attempts` | | `8` | Retries of one batch before it is dropped and counted |
 | `flush_on_exit` | | `true` | Best-effort drain at process exit |
 | `logger` | | warnings on `$stderr` | Anything responding to `info`, `warn` and `error` |
-| `payload_defaults` | | `full`, `1.0`, `262144` | Used when the use-case document names no payload policy |
+| `payload_defaults` | | `full`, `1.0`, `262144` | Used when the prompt document names no payload policy |
 
 The default disk cache path is named by project and environment, for example
-`~/.cache/prompton/use-case document-heydiary-production.json` (`~/Library/Caches/…` on macOS).
+`~/.cache/prompton/prompt document-heydiary-production.json` (`~/Library/Caches/…` on macOS).
 
 ## Resilience: how config reaches your process
 
 ```
-startup: memory ──▶ disk cache ──▶ bundled use-case document
-lookup:  use_case("greeting") checks only greeting's cache
+startup: memory ──▶ disk cache ──▶ bundled prompt document
+lookup:  prompt("greeting") checks only greeting's cache
 fetch:   GET /prompts/greeting?environment=… with greeting's If-None-Match
          200 ─▶ replace greeting only + write the merged disk cache   source: remote
          304 ─▶ mark greeting remotely validated                      source: remote
@@ -139,16 +139,16 @@ Build the bundle at release time and commit it:
 
 ```ruby
 client = PromptOn::Client.new(api_key: ENV.fetch("PTN_API_KEY"))
-client.use_case("greeting")                                 # fetches greeting once when needed
-client.export_use_case_document("config/prompton/use-cases.production.json")
+client.prompt("greeting")                                 # fetches greeting once when needed
+client.export_prompt_document("config/prompton/prompts.production.json")
 ```
 
-Then ship it with `bundle: Rails.root.join("config/prompton/use-cases.production.json").to_s`. One
+Then ship it with `bundle: Rails.root.join("config/prompton/prompts.production.json").to_s`. One
 file per environment: a single shared bundle is refused by the environment guard in whichever
 environment it was not exported from.
 
-`client.use_case_document_info` tells you where the current merged document came from and how old it
-is; `client.use_case_document_status("greeting")` tells you greeting's last attempt, failures and
+`client.prompt_document_info` tells you where the current merged document came from and how old it
+is; `client.prompt_document_status("greeting")` tells you greeting's last attempt, failures and
 next allowed fetch time.
 
 ## How it fails
@@ -160,21 +160,21 @@ next allowed fetch time.
 | `304 Not Modified` with a cached value | marks that prompt remotely validated | nothing |
 | `304 Not Modified` with no cached value | treats it as a failed fetch | `PromptOn::NotReadyError` on a cold cache |
 | `429`, `5xx`, timeout, DNS, connection refused | serves the previous value and rate-limits the next attempt for 10 seconds | stale config, or `PromptOn::NotReadyError` when cold |
-| PromptOn down, disk cache present | serves the disk document | `use_case.source == "disk"` |
-| PromptOn down, only a bundle present | serves the bundled document | `use_case.source == "bundle"` |
-| PromptOn down, nothing cached anywhere | cannot select a use case | `PromptOn::NotReadyError` |
-| Use-case document from another environment or project | ignores the file | one warning line; keeps looking |
-| Use-case document without exact integer `schema_version: 1` | refuses it and keeps the previous value | `PromptOn::UnsupportedSchemaVersionError` only when no value exists |
-| Use case key not in the use-case document | — | `PromptOn::UnknownUseCaseError` |
-| Use case with no live deployment here | — | `PromptOn::UnresolvedError` |
-| Prompt name the pin does not carry | never falls back to `default` | `PromptOn::UnknownPromptError` with `prompt_names` |
+| PromptOn down, disk cache present | serves the disk document | `prompt.source == "disk"` |
+| PromptOn down, only a bundle present | serves the bundled document | `prompt.source == "bundle"` |
+| PromptOn down, nothing cached anywhere | cannot select a prompt | `PromptOn::NotReadyError` |
+| Prompt document from another environment or project | ignores the file | one warning line; keeps looking |
+| Prompt document without exact integer `schema_version: 1` | refuses it and keeps the previous value | `PromptOn::UnsupportedSchemaVersionError` only when no value exists |
+| Prompt key not in the prompt document | — | `PromptOn::UnknownPromptError` |
+| Prompt with no live deployment here | — | `PromptOn::UnresolvedError` |
+| Template name the pin does not carry | never falls back to `default` | `PromptOn::UnknownPromptError` with `template_names` |
 | Template reads a variable you did not pass | — | `PromptOn::MissingVariableError` with `variable` |
 | Log batch gets `429` or `5xx` | retries the same ids, honouring `Retry-After` | nothing; dropped and counted after `max_send_attempts` |
 | Log batch gets `413` | splits it in half and resends | nothing |
 | Log batch gets any other `4xx` | drops it, counts it, logs once | nothing |
 | Log queue full | drops the oldest, counts them | nothing; one warning per minute |
 | Shutdown while a retry pause is running | waits the pause out when it fits in the timeout, otherwise drops what is left and counts it | `flush` reports `queued` and `paused_for`; one warning line naming the count |
-| Log record missing `use_case`, `model`, `status` or `started_at` | refuses to guess the field | `PromptOn::InvalidRecordError` with `field` |
+| Log record missing `prompt`, `model`, `status` or `started_at` | refuses to guess the field | `PromptOn::InvalidRecordError` with `field` |
 | No API key configured | no remote calls; disk and bundle only | one warning line at startup |
 
 A log must never fail because PromptOn did. Config is stale in the worst case, not absent.
@@ -182,28 +182,28 @@ A log must never fail because PromptOn did. Config is stale in the worst case, n
 ## Resolving and rendering
 
 ```ruby
-use_case = PromptOn.use_case("diary_generation")
+prompt = PromptOn.prompt("diary_generation")
 
-use_case.model               # "anthropic/claude-sonnet-4" — the provider model string
-use_case.model_id            # deprecated local cache evidence; nil for schema1 readable configs
-use_case.provider            # "openrouter"
-use_case.params              # use_case.default_params <- deployment.params
-use_case.provider_options    # model.provider_options   <- deployment.provider_options
-use_case.kind                # "chat" | "decision" | "text" | "embedding"
-use_case.prompt              # "default"
-use_case.prompt_names        # ["default"]
-use_case.deployment_id       # deprecated local cache evidence; nil for schema1 readable configs
-use_case.deployment_revision # the pin revision, e.g. "v2026.10.14-1"
-use_case.prompt_version_id   # deprecated local cache evidence; nil for schema1 readable configs
-use_case.prompt_version_number # the immutable prompt version number
-use_case.source              # "remote" | "disk" | "bundle" | "manual"
-use_case.messages_template   # the raw chat templates (nil for text/embedding)
-use_case.text_template       # the raw text template (nil for chat/embedding)
+prompt.model               # "anthropic/claude-sonnet-4" — the provider model string
+prompt.model_id            # deprecated local cache evidence; nil for schema1 readable configs
+prompt.provider            # "openrouter"
+prompt.params              # prompt.default_params <- deployment.params
+prompt.provider_options    # model.provider_options   <- deployment.provider_options
+prompt.kind                # "chat" | "decision" | "text" | "embedding"
+prompt.prompt              # "default"
+prompt.template_names        # ["default"]
+prompt.deployment_id       # deprecated local cache evidence; nil for schema1 readable configs
+prompt.deployment_revision # the pin revision, e.g. "v2026.10.14-1"
+prompt.prompt_version_id   # deprecated local cache evidence; nil for schema1 readable configs
+prompt.prompt_version_number # the immutable prompt version number
+prompt.source              # "remote" | "disk" | "bundle" | "manual"
+prompt.messages_template   # the raw chat templates (nil for text/embedding)
+prompt.text_template       # the raw text template (nil for chat/embedding)
 
-use_case.messages(name: "Ada") # chat: the rendered message list
-use_case.text(name: "Ada")     # text: the rendered string
-use_case.detected_variables    # ["name"]
-PromptOn.prompt_names("diary_generation")   # ["default"]
+prompt.messages(name: "Ada") # chat: the rendered message list
+prompt.text(name: "Ada")     # text: the rendered string
+prompt.detected_variables    # ["name"]
+PromptOn.template_names("diary_generation")   # ["default"]
 ```
 
 Both merges are **shallow** and the right side wins; an override of `nil` is kept as `nil`, not
@@ -216,10 +216,10 @@ filters. Nothing else parses. A variable that is absent from your hash is a
 empty and `default` replaces it. There is no HTML escaping. A prompt version whose engine is `raw`
 comes back verbatim.
 
-For a smoke test or a genuinely low-traffic path, `PromptOn.remote_use_case("greeting")` asks the
-server instead (`POST /use-cases/{key}/prompt`) and caches the answer for the same TTL. Pass `variables:` and the
-rendering still happens locally, in the returned use case: `remote_use_case("greeting", variables:
-{ name: "Ada" }).messages` are the rendered messages, not the template. `PromptOn.api_use_case` returns
+For a smoke test or a genuinely low-traffic path, `PromptOn.remote_prompt("greeting")` asks the
+server instead (`POST /prompts/{key}/prompt`) and caches the answer for the same TTL. Pass `variables:` and the
+rendering still happens locally, in the returned prompt: `remote_prompt("greeting", variables:
+{ name: "Ada" }).messages` are the rendered messages, not the template. `PromptOn.api_prompt` returns
 the server's raw JSON. Neither belongs in a hot loop.
 
 ## Monitoring logs
@@ -228,10 +228,10 @@ Three ways in.
 
 ```ruby
 # 1. the wrapper: times the provider call and logs it
-use_case.track(variables: vars, input_messages: messages,
+prompt.track(variables: vars, input_messages: messages,
                end_user_ref: user.id, trace_id: "job:#{job.id}", sequence: attempt,
                context: { language: "ko", plan: "pro" }, metadata: { job_id: job.id }) do
-  response = openai.chat(model: use_case.model, messages: messages, **use_case.params)
+  response = openai.chat(model: prompt.model, messages: messages, **prompt.params)
 
   { content: response.dig("choices", 0, "message", "content"),
     finish_reason: response.dig("choices", 0, "finish_reason"),
@@ -242,7 +242,7 @@ end
 
 # 2. one record you built yourself (streaming, a background scorer, a replay)
 PromptOn.log({ "status" => "ok", "started_at" => started_at, "latency_ms" => 4180,
-               "output" => { "content" => text } }, use_case_evidence: use_case)
+               "output" => { "content" => text } }, prompt_evidence: prompt)
 
 # 3. send what is queued and wait — shutdown, scripts, tests
 PromptOn.flush(timeout: 5)   # => {sent: 12, accepted: 12, duplicates: 0, rejected: 0}
@@ -276,10 +276,10 @@ PromptOn::Failure.new(kind: "parse", message: e.message,
 ### The record
 
 `log` fills in `id` (a **UUIDv7** — the column is a UUIDv7 type and a v4 fails on write), `sdk`,
-and the use-case evidence when you pass a `use-case evidence`. A top-level key whose value is `nil` is
+and the prompt evidence when you pass a `prompt evidence`. A top-level key whose value is `nil` is
 omitted.
 
-The four fields the server requires — `use_case`, `model`, `status`, `started_at` — are yours:
+The four fields the server requires — `prompt`, `model`, `status`, `started_at` — are yours:
 a missing one raises `PromptOn::InvalidRecordError` naming the field. `started_at` in particular is
 never guessed, because the records you build by hand are exactly the ones whose provider call started
 earlier than the call to `log` (a stream that has just finished, a background scorer, a replay).
@@ -288,7 +288,7 @@ earlier than the call to `log` (a stream that has just finished, a background sc
 | Field | Meaning |
 |---|---|
 | `id` | UUIDv7, generated by the app; the idempotency key, so a resend is a duplicate, never a second row |
-| `use_case`, `kind` | which call site, and `chat` / `text` / `embedding` |
+| `prompt`, `kind` | which call site, and `chat` / `text` / `embedding` |
 | `model`, `provider`, `model_used`, `upstream_provider` | what was requested and what actually answered |
 | `deployment_revision`, `prompt`, `prompt_version_number` | readable prompt evidence for the pin this call selected. `deployment_revision` is a string like `v2026.09.30-1`; `prompt_version_number` is present when the prompt has a pinned version |
 | Compatibility | log requests no longer include retired resource UUID refs (`deployment_id`, `prompt_version_id`, `model_id`). Older released SDKs that still emit them need the matching server rollout before they can post logs to the new request contract |
@@ -309,8 +309,8 @@ counts as truncated — `tool_calls` is not a truncation.
 
 ### Payload policy
 
-Before a record leaves the process the SDK applies the use case's `payload_policy` from the
-use-case document: the sampling decision (a pure function of the id, so a resend decides the same way, and
+Before a record leaves the process the SDK applies the prompt's `payload_policy` from the
+prompt document: the sampling decision (a pure function of the id, so a resend decides the same way, and
 errors and `stop_kind: "length"` are always kept), then `none` / `hash` / `full`, then the 2 KB
 cap on `error.message`, then `hash_end_user`, then your `redact` hook last. In `full` mode strings
 are truncated head-and-tail on a UTF-8 boundary with a `…[truncated N bytes]…` marker, and every
@@ -332,13 +332,13 @@ PromptOn.stub("diary_generation", model: "openai/gpt-4o-mini",
 run_the_thing
 
 record = PromptOn.logged.first
-assert_equal "diary_generation", record["use_case"]
+assert_equal "diary_generation", record["prompt"]
 assert_equal "ok", record["status"]
 ```
 
 In `mode: :test` there is no HTTP at all and every record is captured in `PromptOn.logged`
-(`PromptOn.clear_logs` empties it). `PromptOn.put_use_case_document(hash_or_path)` installs a whole
-document; `stub` builds a minimal one for a single use case and accumulates across calls.
+(`PromptOn.clear_logs` empties it). `PromptOn.put_prompt_document(hash_or_path)` installs a whole
+document; `stub` builds a minimal one for a single prompt and accumulates across calls.
 In `mode: :offline` the SDK reads the disk cache and the bundle and never calls out, which is what
 you want in CI.
 
@@ -346,9 +346,9 @@ you want in CI.
 
 All of them are `PromptOn::Error`, each with a `code`:
 
-`NotReadyError`, `UnknownUseCaseError`, `UnresolvedError`, `UnknownPromptError` (carries `prompt`
-and `prompt_names`), `MissingVariableError` (carries `variable`), `TemplateSyntaxError`,
-`TemplateRenderError`, `InvalidUseCaseDocumentError`, `UnsupportedSchemaVersionError`, `ApiError`
+`NotReadyError`, `UnknownPromptError`, `UnresolvedError`, `UnknownPromptError` (carries `prompt`
+and `template_names`), `MissingVariableError` (carries `variable`), `TemplateSyntaxError`,
+`TemplateRenderError`, `InvalidPromptDocumentError`, `UnsupportedSchemaVersionError`, `ApiError`
 (carries `status`, `code` and `details`), `TransportError`, `InvalidRecordError`,
 `ConfigurationError`.
 
@@ -379,7 +379,7 @@ bundle exec rubocop            # lint
 ```
 
 `test/conformance/` is the cross-language contract every PromptOn SDK ships: template rendering,
-use-case selection, monitoring-log truncation, `stop_kind` and golden records, with expected values. This
+prompt selection, monitoring-log truncation, `stop_kind` and golden records, with expected values. This
 SDK reproduces every normative case. Two non-normative cases differ on purpose: this renderer
 implements only the whitelisted filters (so `upcase` raises instead of being applied), and it
 renders a hash in an output position with Ruby's `inspect` rather than Elixir's.

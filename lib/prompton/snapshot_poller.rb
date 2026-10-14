@@ -174,7 +174,7 @@ module PromptOn
 
         false
       end
-    rescue InvalidUseCaseDocumentError => e
+    rescue InvalidPromptDocumentError => e
       failed(key, e.message)
       raise e if @store.prompt_entry(key).nil?
 
@@ -210,7 +210,7 @@ module PromptOn
     end
 
     def known_keys
-      @store.entry&.data&.use_case_keys || []
+      @store.entry&.data&.prompt_keys || []
     end
 
     def state_status(state)

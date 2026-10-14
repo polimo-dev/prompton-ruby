@@ -54,21 +54,21 @@ module PromptOn
       result
     end
 
-    # Assembles one monitoring-log record from use-case evidence, call metadata and the result.
+    # Assembles one monitoring-log record from prompt evidence, call metadata and the result.
     def build(evidence, meta, id:, started_at:, latency_ms:, status:, result:, error:)
       result = normalize_result(result)
       usage = result[:usage] || {}
 
       record = {
         "id" => id,
-        "prompt_key" => evidence&.use_case || meta[:prompt_key] || meta[:use_case],
+        "prompt_key" => evidence&.prompt || meta[:prompt_key],
         "kind" => evidence&.kind || meta[:kind],
         "model" => result[:model] || evidence&.model || meta[:model],
         "model_used" => result[:model_used],
         "provider" => evidence&.provider,
         "upstream_provider" => result[:upstream_provider],
         "deployment_revision" => evidence&.deployment_revision,
-        "template" => evidence&.prompt,
+        "template" => evidence&.template,
         "prompt_version_number" => evidence&.prompt_version_number,
         "source" => evidence&.source,
         "status" => status,

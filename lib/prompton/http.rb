@@ -85,8 +85,8 @@ module PromptOn
     end
 
     # POST /prompts/{key}/render — the simple path and the smoke test.
-    def post_resolve(use_case, payload)
-      request = Net::HTTP::Post.new(request_uri("/prompts/#{URI.encode_www_form_component(use_case)}/render"))
+    def post_resolve(prompt, payload)
+      request = Net::HTTP::Post.new(request_uri("/prompts/#{URI.encode_www_form_component(prompt)}/render"))
       request["Content-Type"] = "application/json"
       request.body = JSON.generate(payload)
       perform(request)

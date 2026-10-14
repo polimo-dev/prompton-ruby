@@ -4,11 +4,11 @@ require_relative "test_helper"
 
 class LogBuilderTest < Minitest::Test
   def setup
-    @evidence = PromptOn::Resolver.resolve(PromptOn::UseCaseDocument.from_hash(snapshot_document),
+    @evidence = PromptOn::Resolver.resolve(PromptOn::PromptDocument.from_hash(snapshot_document),
                                            "greeting", source: "remote")
   end
 
-  def test_the_record_carries_the_use_case_evidence_and_the_result
+  def test_the_record_carries_the_prompt_evidence_and_the_result
     record = build(status: "ok", result: {
                      content: "Hello, Ada!", finish_reason: "stop", model_used: "openai/gpt-4o-mini",
                      upstream_provider: "OpenAI", cost_usd: 0.000112, cost_source: "provider",
@@ -78,7 +78,7 @@ class LogBuilderTest < Minitest::Test
     assert_equal 4, build(status: "ok", result: anthropic).dig("usage", "output_tokens")
   end
 
-  def test_input_text_is_carried_for_a_text_use_case
+  def test_input_text_is_carried_for_a_text_prompt
     record = build(status: "ok", result: {}, meta: { input_text: "Summarize: a, b" })
 
     assert_equal({ "text" => "Summarize: a, b" }, record["input"])

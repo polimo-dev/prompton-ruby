@@ -16,8 +16,8 @@ module PromptOn
     end
   end
 
-  # No use-case document is available from any tier (memory, disk, bundle, remote), so nothing can be
-  # resolved. This is the only use-case selection failure caused by PromptOn being unreachable.
+  # No prompt document is available from any tier (memory, disk, bundle, remote), so nothing can be
+  # resolved. This is the only prompt selection failure caused by PromptOn being unreachable.
   class NotReadyError < Error
     def initialize(message = "PromptOn is unreachable and nothing is cached " \
                              "(memory, disk and bundle are all empty)")
@@ -29,27 +29,27 @@ module PromptOn
     end
   end
 
-  # The use-case document holds no use case with this key.
-  class UnknownUseCaseError < Error
-    attr_reader :use_case
+  # The prompt document holds no prompt with this key.
+  class UnknownPromptError < Error
+    attr_reader :prompt
 
-    def initialize(use_case)
-      @use_case = use_case
-      super("unknown use case: #{use_case}")
+    def initialize(prompt)
+      @prompt = prompt
+      super("unknown prompt: #{prompt}")
     end
 
     def code
-      "unknown_use_case"
+      "unknown_prompt"
     end
   end
 
-  # The use case exists but has no live deployment in this environment.
+  # The prompt exists but has no live deployment in this environment.
   class UnresolvedError < Error
-    attr_reader :use_case
+    attr_reader :prompt
 
-    def initialize(use_case)
-      @use_case = use_case
-      super("use case #{use_case} has no live deployment in this environment")
+    def initialize(prompt)
+      @prompt = prompt
+      super("prompt #{prompt} has no live deployment in this environment")
     end
 
     def code
@@ -57,22 +57,22 @@ module PromptOn
     end
   end
 
-  # The live deployment pins no prompt version under the requested name. There is never a
+  # The live deployment pins no template version under the requested name. There is never a
   # fallback to "default": shipping English to a request that asked for "ko" is worse than an
   # error.
-  class UnknownPromptError < Error
-    attr_reader :use_case, :prompt, :prompt_names
+  class UnknownTemplateError < Error
+    attr_reader :prompt, :template, :template_names
 
-    def initialize(use_case, prompt, prompt_names)
-      @use_case = use_case
+    def initialize(prompt, template, template_names)
       @prompt = prompt
-      @prompt_names = prompt_names
-      super("the live deployment of #{use_case} pins no prompt named #{prompt.inspect} — " \
-            "prompt names: #{prompt_names.join(", ")}")
+      @template = template
+      @template_names = template_names
+      super("the live deployment of #{prompt} pins no template named #{template.inspect} — " \
+            "template names: #{template_names.join(", ")}")
     end
 
     def code
-      "unknown_prompt"
+      "unknown_template"
     end
   end
 

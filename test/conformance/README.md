@@ -2,7 +2,7 @@
 
 These JSON files are the cross-language contract for PromptOn SDKs. Every SDK — Python, Node.js,
 Go, Ruby, Java, Kotlin, Rust — copies this directory into its own test suite and asserts that it
-reproduces the expected values byte for byte. When two SDKs disagree about how a prompt renders,
+reproduces the expected values byte for byte. When two SDKs disagree about how a template renders,
 which model a prompt document selects, or how a monitoring log is truncated, an app that talks to
 PromptOn from two languages gets two different answers. That is what these files prevent.
 
@@ -23,7 +23,7 @@ Each file records the commit it was generated from in `generated_from.commit`.
 | File | What it pins down | Cases |
 |---|---|---|
 | `template.json` | Prompt rendering: the Liquid subset PromptOn allows | 72 render (4 non-normative), 10 lint, 5 detected-variables |
-| `prompt.json` | Prompt document + prompt (+ prompt name) → model, params, prompt version, rendered messages | 3 documents, 15 cases |
+| `prompt.json` | Prompt document + prompt (+ template name) → model, params, template version, rendered messages | 3 documents, 15 cases |
 | `truncation.json` | The payload policy the SDK applies to a monitoring log before sending it | 19 cases + 5 sampling buckets |
 | `stop_kind.json` | Provider `finish_reason` → PromptOn `stop_kind` | 22 cases |
 | `log_record.json` | Complete monitoring-log records and the batch envelope | 5 records |
@@ -75,7 +75,7 @@ log as `POST /api/v1/logs` accepts it, and `batch_envelope.request` wraps all of
 batch. Use them to check your record builder's output shape and your batch envelope. `field_rules`
 lists what the server validates.
 
-**An LLM call id must be a UUIDv7, not a UUIDv4.** The request-level validation accepts any UUID
+**A log id must be a UUIDv7, not a UUIDv4.** The request-level validation accepts any UUID
 string, but the column is a UUIDv7 type and a v4 id fails on write — the record comes back in
 `rejected` with `record could not be stored`, which does not say why. Generate 48 bits of unix
 milliseconds, the version nibble 7, then random bits.
@@ -130,7 +130,7 @@ genuinely contains `{{` or `{%`.
 ### Merge order
 
 ```
-params            = prompt_key.default_params  <- deployment.params
+params            = prompt.default_params  <- deployment.params
 provider_options  = model.provider_options   <- deployment.provider_options
 ```
 
@@ -138,22 +138,22 @@ Both are **shallow** merges where the right side wins. A nested map on the right
 side whole; it is not merged into it. An override value of `null` is kept as `null`, not deleted —
 apps rely on sending `"only": null` to clear a provider restriction.
 
-### Prompt lookup
+### Prompt selection
 
-A deployment revision is a **pin**, not a router. It is one model plus one pinned prompt version
-per prompt name. Revision values are strings like `v2026.09.30-1`, using the UTC creation date.
-At request time the only selection axis is the prompt name (default `"default"`),
+A deployment revision is a **pin**, not a router. It is one model plus one pinned template version
+per template name. Revision values are strings like `v2026.09.30-1`, using the UTC creation date.
+At request time the only selection axis is the template name (default `"default"`),
 and the environment is a request parameter that decides which prompt document you fetched.
 
-* Unknown prompt key → `unknown_template_key`.
+* Unknown prompt key → `unknown_prompt`.
 * Prompt exists but has no deployment in this environment → `unresolved`.
 * The deployment pins no version under the requested name → `unknown_template`. **There is no
   fallback to `"default"`**: shipping English to a request that asked for `"ko"` is worse than an
   error. The expectation carries `template_names`, which is what the server's 404 lists.
-* Prompt of kind `embedding` has no prompt at all: `prompt` and `prompt_version` are `null`, and
-  a prompt name passed with the request is ignored rather than rejected.
-* If the prompt document references a prompt version or model id it does not contain, lookup still
-  succeeds with those fields `null` and a warning. A healthy server never emits such a document.
+* Prompt of kind `embedding` has no template at all: `prompt` and `prompt_version` are `null`, and
+  a template name passed with the request is ignored rather than rejected.
+* If the prompt document references a template version or model id it does not contain, prompt selection still
+  succeeds with those fields `null` and a warning. A healthy server never emits such a prompt document.
 
 ### Truncation arithmetic
 

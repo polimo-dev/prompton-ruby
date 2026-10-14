@@ -3,7 +3,7 @@
 require_relative "test_helper"
 
 # Executes conformance/*.json, the cross-language contract every PromptOn SDK ships in its own
-# test suite. When two SDKs disagree about how a prompt renders, which model a snapshot resolves
+# test suite. When two SDKs disagree about how a template renders, which model a snapshot resolves
 # to, or how a monitoring log is truncated, an app that talks to PromptOn from two languages gets
 # two different answers. That is what these files prevent.
 class ConformanceTest < Minitest::Test
@@ -71,20 +71,20 @@ class ConformanceTest < Minitest::Test
     assert_equal %w[liquid raw], document["engines"].sort
   end
 
-  # --- use_case.json --------------------------------------------------------
+  # --- prompt.json --------------------------------------------------------
 
   def test_every_conformance_document_decodes_as_schema_v1
     conformance("prompt.json")["documents"].each do |reference, raw|
-      data = PromptOn::UseCaseDocument.from_hash(raw)
-      assert_equal PromptOn::UseCaseDocument::SCHEMA_VERSION, data.schema_version, reference
+      data = PromptOn::PromptDocument.from_hash(raw)
+      assert_equal PromptOn::PromptDocument::SCHEMA_VERSION, data.schema_version, reference
     end
   end
 
   def test_resolve_cases
     document = conformance("prompt.json")
-    assert_equal (document["default_template"] || document["default_prompt"]), PromptOn::Resolver::DEFAULT_PROMPT
+    assert_equal (document["default_template"] || document["default_prompt"]), PromptOn::Resolver::DEFAULT_TEMPLATE
 
-    snapshots = document["documents"].transform_values { |raw| PromptOn::UseCaseDocument.from_hash(raw) }
+    snapshots = document["documents"].transform_values { |raw| PromptOn::PromptDocument.from_hash(raw) }
 
     document["cases"].each do |kase|
       data = snapshots.fetch(kase["document_ref"])
@@ -158,7 +158,7 @@ class ConformanceTest < Minitest::Test
       assert_equal "7", record["id"][14], "#{name}: id must be a UUIDv7, not a v4"
       assert_includes %w[ok error], record["status"], "#{name}: status"
       assert Time.iso8601(record["started_at"]), "#{name}: started_at"
-      assert_operator record["prompt_key"].bytesize, :<=, 512, "#{name}: prompt_key"
+      assert_operator record["prompt_key"].bytesize, :<=, 512, "#{name}: prompt"
 
       assert_optional_enum(record["kind"], KINDS, "#{name}: kind")
       assert_optional_enum(record["provider"], PROVIDERS, "#{name}: provider")
@@ -167,7 +167,7 @@ class ConformanceTest < Minitest::Test
       assert_optional_enum(record.dig("usage", "cost_source"), COST_SOURCES, "#{name}: cost_source")
 
       %w[deployment_id prompt_version_id model_id].each do |key|
-        refute record.key?(key), "#{name}: retired #{key} must be omitted"
+        refute record.key?(key), "#{name}: #{key} is a retired public resource reference"
       end
       if record.key?("prompt_version_number")
         assert_operator record["prompt_version_number"], :>, 0, "#{name}: prompt_version_number"
@@ -231,13 +231,11 @@ class ConformanceTest < Minitest::Test
   end
 
   def resolve_expectation(data, kase)
-    resolution = PromptOn::Resolver.resolve(
-      data, kase["prompt_key"] || kase["use_case"], prompt: kase["template"] || kase["prompt"]
-    )
+    resolution = PromptOn::Resolver.resolve(data, kase["prompt_key"], template: kase["template"])
     expectation = {
-      "key" => resolution.use_case, "kind" => resolution.kind, "deployment_id" => resolution.deployment_id,
-      "revision" => resolution.deployment_revision, "template" => resolution.prompt,
-      "template_names" => resolution.prompt_names, "model_id" => resolution.model_id,
+      "key" => resolution.prompt, "kind" => resolution.kind, "deployment_id" => resolution.deployment_id,
+      "revision" => resolution.deployment_revision, "template" => resolution.template,
+      "template_names" => resolution.template_names, "model_id" => resolution.model_id,
       "model" => resolution.model, "provider" => resolution.provider,
       "params" => resolution.params,
       "provider_options" => resolution.provider_options,
@@ -250,10 +248,10 @@ class ConformanceTest < Minitest::Test
       "warnings" => resolution.warnings.map(&:to_s)
     }
     expectation.merge(rendered(resolution, kase["variables"]))
+  rescue PromptOn::UnknownTemplateError => e
+    { "error" => "unknown_template", "key" => e.prompt, "template" => e.template, "template_names" => e.template_names }
   rescue PromptOn::UnknownPromptError => e
-    { "error" => "unknown_template", "key" => e.use_case, "template" => e.prompt, "template_names" => e.prompt_names }
-  rescue PromptOn::UnknownUseCaseError => e
-    { "error" => "unknown_prompt", "key" => e.use_case }
+    { "error" => "unknown_prompt", "key" => e.prompt }
   rescue PromptOn::MissingVariableError => e
     { "error" => "missing_variable", "variable" => e.variable }
   rescue PromptOn::Error => e

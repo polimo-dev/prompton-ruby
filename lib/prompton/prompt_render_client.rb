@@ -1,19 +1,20 @@
 # frozen_string_literal: true
 
 require_relative "errors"
-require_relative "use_case_evidence"
+require_relative "prompt_document"
+require_relative "prompt_evidence"
 
 module PromptOn
   # The POST /prompts/{key}/render path: the simple way in, and the smoke test.
   #
-  # It follows the same resilience rules as the use-case document store. A response fetched without
-  # variables is cached for the cache TTL per (use case, prompt, environment) and rendered
+  # It follows the same resilience rules as the prompt document store. A response fetched without
+  # variables is cached for the cache TTL per (prompt, template, environment) and rendered
   # locally, so a hot loop never becomes one HTTP call per provider call; on 429, 5xx or a transport
   # failure the cached response is served instead of raising.
   #
-  # For anything but a smoke test or a low-traffic path, prefer the local use-case document:
-  # the prompt endpoint is not a hot-loop endpoint.
-  class UseCasePromptClient
+  # For anything but a smoke test or a low-traffic path, prefer the local prompt document:
+  # the template endpoint is not a hot-loop endpoint.
+  class PromptRenderClient
     CacheEntry = Struct.new(:body, :expires_at, keyword_init: true)
 
     def initialize(config, http)
@@ -23,14 +24,14 @@ module PromptOn
       @cache = {}
     end
 
-    # A use-case evidence built from the server's answer.
+    # A prompt evidence built from the server's answer.
     #
     # Passing +variables+ renders them locally into the returned evidence, so #messages (chat)
-    # or #text (text) carry the rendered prompt rather than the template. Without them the
+    # or #text (text) carry the rendered template rather than the template. Without them the
     # template comes back as it is and you call #render yourself.
-    def resolve(use_case, prompt: nil, environment: nil, variables: nil)
-      body = fetch(use_case, prompt: prompt, environment: environment)
-      evidence = to_use_case_evidence(body, use_case.to_s)
+    def resolve(prompt_key, template: nil, environment: nil, variables: nil)
+      body = fetch(prompt_key, template: template, environment: environment)
+      evidence = to_prompt_evidence(body, prompt_key.to_s)
       return evidence if variables.nil?
 
       evidence.with_rendered(evidence.render(variables))
@@ -40,22 +41,22 @@ module PromptOn
     #
     # Passing +variables+ asks the server to render, which is the smoke-test path and is never
     # cached. Without them the response is cached for the cache TTL.
-    def fetch(use_case, prompt: nil, environment: nil, variables: nil)
-      key = [use_case.to_s, prompt&.to_s, environment || @config.environment]
+    def fetch(prompt_key, template: nil, environment: nil, variables: nil)
+      key = [prompt_key.to_s, template&.to_s, environment || @config.environment]
       cached = variables.nil? ? read_cache(key) : nil
       return cached if cached
 
       payload = { "environment" => environment || @config.environment }
-      payload["template"] = prompt.to_s if prompt
+      payload["template"] = template.to_s if template
       payload["variables"] = variables if variables
 
       begin
-        response = @http.post_resolve(use_case.to_s, payload)
+        response = @http.post_resolve(prompt_key.to_s, payload)
       rescue TransportError => e
         return serve_stale(key, e)
       end
 
-      return handle_failure(key, response, use_case.to_s) unless response.success?
+      return handle_failure(key, response, prompt_key.to_s) unless response.success?
 
       write_cache(key, response.body) if variables.nil?
       response.body
@@ -73,11 +74,11 @@ module PromptOn
     def serve_stale(key, error)
       cached = read_cache(key, ignore_expiry: true)
       unless cached
-        @config.logger.warn("[PromptOn] prompt endpoint failed and nothing is cached: #{error.message}")
+        @config.logger.warn("[PromptOn] template endpoint failed and nothing is cached: #{error.message}")
         raise error
       end
 
-      @config.logger.warn("[PromptOn] prompt endpoint failed (#{error.message}); serving the cached response")
+      @config.logger.warn("[PromptOn] template endpoint failed (#{error.message}); serving the cached response")
       cached
     end
 
@@ -92,29 +93,28 @@ module PromptOn
       when 404
         case details["reason"]
         when "unresolved" then return UnresolvedError.new(key)
-        when "unknown_prompt", "unknown_template"
-          return UnknownPromptError.new(key, (details["template"] || details["prompt"]).to_s,
-                                        details["template_names"] || details["prompt_names"] || [])
+        when "unknown_template"
+          return UnknownTemplateError.new(key, details["template"].to_s,
+                                          details["template_names"] || [])
         end
-        return UnknownUseCaseError.new(key) if details["key"]
+        return UnknownPromptError.new(key) if details["key"]
       end
 
       ApiError.new(response.status, response.body)
     end
 
-    def to_use_case_evidence(body, requested_key)
+    def to_prompt_evidence(body, requested_key)
       deployment = body["deployment"] || {}
       version = body["prompt_version"] || {}
       revision = deployment["revision"]
       unless revision.nil? || revision.is_a?(String)
-        raise InvalidUseCaseDocumentError, "deployment revision must be a string like v2026.09.30-1"
+        raise InvalidPromptDocumentError, "deployment revision must be a string like v2026.09.30-1"
       end
 
-      UseCaseEvidence.new(
-        use_case: body["key"] || requested_key, kind: body["kind"], prompt: body["template"] || body["prompt"],
-        prompt_names: body["template_names"] || body["prompt_names"] || [],
-        deployment_id: deployment["id"],
-        deployment_revision: revision,
+      PromptEvidence.new(
+        prompt: body["key"] || requested_key, kind: body["kind"], template: body["template"],
+        template_names: body["template_names"] || [],
+        deployment_id: deployment["id"], deployment_revision: revision,
         prompt_version_id: version["id"], prompt_version_number: version["number"],
         engine: body["engine"] || "liquid", model: body["model"], model_id: body["model_id"],
         provider: body["provider"], params: body["params"] || {},

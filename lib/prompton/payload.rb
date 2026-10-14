@@ -25,6 +25,13 @@ module PromptOn
 
     module_function
 
+    # Removes resource UUID refs retired from the public log request contract.
+    def strip_retired_resource_fields(log)
+      return log unless log.is_a?(Hash)
+
+      log.reject { |key, _| RETIRED_RESOURCE_FIELDS.include?(key.to_s) }
+    end
+
     # Returns the record with the policy applied.
     def apply(log, policy, payload_defaults: nil, hash_end_user: false, redact: nil, logger: nil)
       policy = normalize_policy(policy, payload_defaults)
@@ -34,12 +41,7 @@ module PromptOn
       run_redact(result, redact, logger)
     end
 
-    # Drops retired public resource UUID references before a monitoring log crosses the SDK boundary.
-    def strip_retired_resource_fields(log)
-      log.reject { |key, _| RETIRED_RESOURCE_FIELDS.include?(key.to_s) }
-    end
-
-    # Normalises a use-case document payload_policy over the SDK defaults. sample_rate is clamped to 0..1.
+    # Normalises a prompt document payload_policy over the SDK defaults. sample_rate is clamped to 0..1.
     def normalize_policy(policy, defaults = nil)
       defaults = DEFAULTS.merge(defaults || {})
       policy = policy.is_a?(Hash) ? symbolize(policy) : {}
@@ -221,7 +223,7 @@ module PromptOn
     end
 
     # The total is over budget: first empty the middle messages into byte-count stubs from the
-    # front (the system prompt and the newest turn are always preserved, so a later middle
+    # front (the system template and the newest turn are always preserved, so a later middle
     # message can survive intact); if that is still not enough, drop the middle entirely.
     def fit_messages(messages, limit)
       stubbed = stub_middle(messages, limit)

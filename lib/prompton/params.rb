@@ -3,7 +3,7 @@
 module PromptOn
   # Shallow merge helper for parameter maps.
   #
-  #   params           = use_case.default_params <- deployment.params
+  #   params           = prompt.default_params <- deployment.params
   #   provider_options = model.provider_options   <- deployment.provider_options
   #
   # The merge is shallow: a nested hash on the right replaces the left side whole. Keys are

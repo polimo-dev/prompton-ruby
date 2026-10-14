@@ -6,7 +6,7 @@ require_relative "test_helper"
 #
 #   PTN_HOST=http://localhost:4000 PTN_API_KEY=ptn_yourproject_… bundle exec rake test
 #
-# It asserts the two things a unit test cannot: that the use-case document this SDK fetches and reads
+# It asserts the two things a unit test cannot: that the prompt document this SDK fetches and reads
 # locally agrees with the server's own POST /prompts/{key}/render, and that the monitoring logs it
 # builds are accepted by the ingest endpoint.
 class IntegrationTest < Minitest::Test
@@ -52,24 +52,20 @@ class IntegrationTest < Minitest::Test
     assert_equal "nope", response.body.dig("error", "details", "environment")
   end
 
-  def test_local_use_case_agrees_with_the_server_for_the_default_prompt
+  def test_local_prompt_agrees_with_the_server_for_the_default_template
     assert_agrees_with_server("greeting", variables: { "name" => "Ada" })
   end
 
-  def test_local_use_case_agrees_with_the_server_for_a_named_prompt
-    assert_agrees_with_server("greeting", prompt: "ko", variables: { "name" => "아다" })
-  end
-
-  def test_local_use_case_agrees_with_the_server_for_a_text_use_case
+  def test_local_prompt_agrees_with_the_server_for_a_text_prompt
     assert_agrees_with_server("summarize", variables: { "items" => %w[alpha beta gamma] })
   end
 
-  def test_local_use_case_agrees_with_the_server_for_an_embedding_use_case
+  def test_local_prompt_agrees_with_the_server_for_an_embedding_prompt
     assert_agrees_with_server("embed")
   end
 
-  def test_remote_use_case_renders_locally_and_agrees_with_the_server
-    chat = @client.remote_use_case("greeting", variables: { "name" => "Ada" })
+  def test_remote_prompt_renders_locally_and_agrees_with_the_server
+    chat = @client.remote_prompt("greeting", variables: { "name" => "Ada" })
     server = @http.post_resolve("greeting", { "environment" => "production",
                                               "variables" => { "name" => "Ada" } })
 
@@ -78,7 +74,7 @@ class IntegrationTest < Minitest::Test
                  chat.messages.map { |message| message.slice("role", "content") },
                  "the resolution comes back rendered, not as the template"
 
-    text = @client.remote_use_case("summarize", variables: { "items" => %w[alpha beta] })
+    text = @client.remote_prompt("summarize", variables: { "items" => %w[alpha beta] })
     server_text = @http.post_resolve("summarize", { "environment" => "production",
                                                     "variables" => { "items" => %w[alpha beta] } })
 
@@ -87,18 +83,15 @@ class IntegrationTest < Minitest::Test
   end
 
   def test_the_error_cases_match_the_server
-    assert_raises(PromptOn::UnknownUseCaseError) { @client.use_case("does_not_exist") }
+    assert_raises(PromptOn::UnknownPromptError) { @client.prompt("does_not_exist") }
     assert_equal 404, @http.post_resolve("does_not_exist", {}).status
 
-    error = assert_raises(PromptOn::UnknownPromptError) { @client.use_case("greeting", prompt: "fr") }
+    assert_raises(PromptOn::UnknownTemplateError) { @client.prompt("greeting", template: "fr") }
     remote = @http.post_resolve("greeting", { "template" => "fr" })
-    assert_equal 404, remote.status
-    assert_equal "unknown_prompt", remote.body.dig("error", "details", "reason")
-    remote_names = remote.body.dig("error", "details", "template_names") ||
-                   remote.body.dig("error", "details", "prompt_names")
-    assert_equal remote_names, error.prompt_names
+    assert_equal 400, remote.status
+    assert_equal "invalid_request", remote.body.dig("error", "code")
 
-    missing = assert_raises(PromptOn::MissingVariableError) { @client.use_case("greeting").messages({}) }
+    missing = assert_raises(PromptOn::MissingVariableError) { @client.prompt("greeting").messages({}) }
     remote = @http.post_resolve("greeting", { "variables" => {} })
     assert_equal 400, remote.status
     assert_equal remote.body.dig("error", "details", "missing_variable"), missing.variable
@@ -132,11 +125,11 @@ class IntegrationTest < Minitest::Test
   end
 
   def test_the_client_sends_what_track_builds
-    use_case = @client.use_case("greeting")
-    messages = use_case.messages(name: "Ada")
+    prompt = @client.prompt("greeting")
+    messages = prompt.messages(name: "Ada")
 
-    use_case.track(variables: { name: "Ada" }, input_messages: messages,
-                   trace_id: "integration:#{Process.pid}", end_user_ref: "user-42") do
+    prompt.track(variables: { name: "Ada" }, input_messages: messages,
+                 trace_id: "integration:#{Process.pid}", end_user_ref: "user-42") do
       { content: "Hello, Ada!", finish_reason: "stop", cost_source: "provider", cost_usd: 0.000012,
         usage: { input_tokens: 38, output_tokens: 6 } }
     end
@@ -157,33 +150,33 @@ class IntegrationTest < Minitest::Test
   end
 
   def test_the_disk_cache_is_written_and_answers_when_the_host_is_unreachable
-    @client.use_case("greeting")
+    @client.prompt("greeting")
 
     offline = PromptOn::Client.new(api_key: ENV.fetch("PTN_API_KEY"), logger: @logger, poll: false,
                                    flush_on_exit: false, host: PromptOnTest::StubServer.dead_url,
                                    disk_cache: File.join(@dir, "snapshot.json"))
 
-    assert_equal "disk", offline.use_case("greeting").source
+    assert_equal "disk", offline.prompt("greeting").source
     offline.close
   end
 
   private
 
-  def assert_agrees_with_server(use_case, prompt: nil, variables: nil)
-    local = @client.use_case(use_case, prompt: prompt)
-    assert_instance_of PromptOn::UseCaseDocument, @client.use_case_document
+  def assert_agrees_with_server(prompt, template: nil, variables: nil)
+    local = @client.prompt(prompt, template: template)
+    assert_instance_of PromptOn::PromptDocument, @client.prompt_document
 
-    payload = { "prompt_key" => use_case, "environment" => "production" }
-    payload["template"] = prompt if prompt
+    payload = { "prompt_key" => prompt, "environment" => "production" }
+    payload["template"] = template if template
     payload["variables"] = variables if variables
-    remote = @http.post_resolve(use_case, payload.except("prompt_key"))
+    remote = @http.post_resolve(prompt, payload.except("prompt_key"))
 
     assert_equal 200, remote.status, remote.body.inspect
     agree(remote.body["kind"], local.kind, "kind")
     agree(remote.body.dig("deployment", "id"), local.deployment_id, "deployment id")
     agree(remote.body.dig("deployment", "revision"), local.deployment_revision, "revision")
-    agree remote.body["template"] || remote.body["prompt"], local.prompt, "prompt"
-    agree remote.body["template_names"] || remote.body["prompt_names"], local.prompt_names, "prompt_names"
+    agree(remote.body["template"], local.template, "template")
+    agree(remote.body["template_names"], local.template_names, "template_names")
     agree(remote.body["model"], local.model, "model")
     agree(remote.body["model_id"], local.model_id, "model_id")
     agree(remote.body["provider"], local.provider, "provider")

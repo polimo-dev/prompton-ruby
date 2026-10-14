@@ -50,7 +50,7 @@ module PromptOnTest
     end
   end
 
-  # A snapshot document with the three kinds of use case, ready to serve or write to disk.
+  # A snapshot document with the three kinds of prompt, ready to serve or write to disk.
   def snapshot_document(environment: "production", project: "sdkfixture", temperature: 0.2)
     {
       "schema_version" => 1, "project" => project, "environment" => environment,

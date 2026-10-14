@@ -30,12 +30,12 @@ class PayloadTest < Minitest::Test
   end
 
   def test_hash_mode_digests_the_wrapped_value
-    result = PromptOn::Payload.apply(record.merge("input" => "raw prompt text"),
+    result = PromptOn::Payload.apply(record.merge("input" => "raw template text"),
                                      FULL.merge(mode: "hash"))
 
     assert_equal %w[bytes hashed sha256], result["input"].keys.sort
-    assert_equal 26, result["input"]["bytes"], "the digest covers {\"text\":\"…\"}"
-    refute_includes JSON.generate(result), "raw prompt text"
+    assert_equal 28, result["input"]["bytes"], "the digest covers {\"text\":\"…\"}"
+    refute_includes JSON.generate(result), "raw template text"
   end
 
   def test_none_mode_keeps_the_narrow_record

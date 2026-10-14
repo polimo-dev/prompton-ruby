@@ -6,10 +6,10 @@ Gem::Specification.new do |spec|
   spec.name = "prompton-sdk"
   spec.version = PromptOn::VERSION
   spec.authors = ["Polimo"]
-  spec.summary = "The official Ruby SDK for PromptOn use-case documents and monitoring logs."
+  spec.summary = "The official Ruby SDK for PromptOn prompt documents and monitoring logs."
   spec.description = <<~TEXT
-    PromptOn holds one pin per use case and environment: a prompt version, one model and its
-    params. This SDK fetches a use-case document of those pins, renders the pinned prompt with your
+    PromptOn holds one pin per prompt and environment: a template version, one model and its
+    params. This SDK fetches a prompt document of those pins, renders the pinned template with your
     variables, and batches monitoring logs back. Your app calls the provider itself, with its own
     key and its own HTTP client, so PromptOn is never in the request path and an outage costs you
     nothing but fresher config. No runtime dependencies.

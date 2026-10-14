@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# A complete PromptOn call: select the use case, render the prompt, call the provider, log the result.
+# A complete PromptOn call: select the prompt, render the prompt, call the provider, log the result.
 #
 #   PTN_API_KEY=ptn_yourproject_… ruby examples/greeting.rb
 #
@@ -12,22 +12,22 @@ require "prompton"
 
 prompton = PromptOn::Client.new(
   environment: ENV.fetch("PTN_ENVIRONMENT", "production"),
-  bundle: File.expand_path("use-cases.production.json", __dir__)
+  bundle: File.expand_path("prompts.production.json", __dir__)
 )
 
-use_case = prompton.use_case("greeting", prompt: ENV.fetch("PROMPT", "default"))
+prompt = prompton.prompt("greeting", prompt: ENV.fetch("PROMPT", "default"))
 variables = { name: ENV.fetch("NAME", "Ada") }
-managed_messages = use_case.messages(variables)
+managed_messages = prompt.messages(variables)
 app_history = [{ "role" => "assistant", "content" => "Ready to greet." }]
 messages = managed_messages +
            app_history +
            [{ "role" => "user", "content" => "Say hello to #{variables[:name]}." }]
 
-puts "model:    #{use_case.model} (#{use_case.provider})"
-puts "pin:      revision #{use_case.deployment_revision}"
-puts "prompt:   #{use_case.prompt} (version #{use_case.prompt_version_number}) " \
-     "of #{use_case.prompt_names.join(", ")}"
-puts "params:   #{use_case.params}"
+puts "model:    #{prompt.model} (#{prompt.provider})"
+puts "pin:      revision #{prompt.deployment_revision}"
+puts "prompt:   #{prompt.prompt} (version #{prompt.prompt_version_number}) " \
+     "of #{prompt.template_names.join(", ")}"
+puts "params:   #{prompt.params}"
 puts "messages: #{messages.inspect}"
 puts
 
@@ -40,11 +40,11 @@ def call_provider(model, messages, params)
     cost_usd: 0.000112, cost_source: "provider" }
 end
 
-result = use_case.track(
+result = prompt.track(
   variables: variables, input_messages: messages,
   end_user_ref: "user-42", trace_id: "example:1", context: { language: "en" }
 ) do
-  call_provider(use_case.model, messages, use_case.params)
+  call_provider(prompt.model, messages, prompt.params)
 end
 
 puts "completion: #{result[:content]}"

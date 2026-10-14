@@ -8,45 +8,45 @@ require_relative "prompton/result"
 require_relative "prompton/uuid_v7"
 require_relative "prompton/stop_kind"
 require_relative "prompton/template"
-require_relative "prompton/use_case_document"
-require_relative "prompton/use_case_evidence"
-require_relative "prompton/use_case"
+require_relative "prompton/prompt_document"
+require_relative "prompton/prompt_evidence"
+require_relative "prompton/prompt"
 require_relative "prompton/resolver"
 require_relative "prompton/payload"
 require_relative "prompton/config"
 require_relative "prompton/http"
 require_relative "prompton/snapshot_store"
 require_relative "prompton/snapshot_poller"
-require_relative "prompton/use_case_prompt_client"
+require_relative "prompton/prompt_render_client"
 require_relative "prompton/log_buffer"
 require_relative "prompton/log_builder"
 require_relative "prompton/client"
 
 # PromptOn is the control plane for an app's LLM prompts.
 #
-# This SDK fetches a use-case document of the app's pins (per use case and environment: prompt version,
-# one model, params), renders the pinned prompt with this call's variables, and batches
+# This SDK fetches a prompt document of the app's pins (per prompt and environment: template version,
+# one model, params), renders the pinned template with this call's variables, and batches
 # monitoring logs back. Your app calls the provider itself, with its own key and its own HTTP
 # client — PromptOn is never in the request path, and if it is down your app keeps running on the
-# last use-case document it received.
+# last prompt document it received.
 #
 #   PromptOn.configure(api_key: ENV["PTN_API_KEY"])
 #
-#   use_case = PromptOn.use_case("greeting", prompt: "ko")
-#   messages = use_case.messages(name: "Ada")
+#   prompt = PromptOn.prompt("greeting")
+#   messages = prompt.messages(name: "Ada", language: "ko")
 #
-#   use_case.track(variables: { name: "Ada" }, input_messages: messages) do
-#     openai.chat(model: use_case.model, messages: messages, **use_case.params)
+#   prompt.track(variables: { name: "Ada", language: "ko" }, input_messages: messages) do
+#     openai.chat(model: prompt.model, messages: messages, **prompt.params)
 #   end
 #
 # Every method here delegates to a default PromptOn::Client. Build your own with
 # PromptOn::Client.new when you want several, or when you would rather not have a global.
 module PromptOn
   DELEGATED = %i[
-    use_case prompt_names remote_use_case api_use_case
-    use_case_document use_case_document_info use_case_document_status refresh refresh! export_use_case_document
+    prompt template_names remote_prompt api_prompt
+    prompt_document prompt_document_info prompt_document_status refresh refresh! export_prompt_document
     log log_events log_id flush log_stats
-    logged logged_events clear_logs put_use_case_document stub config
+    logged logged_events clear_logs put_prompt_document stub config
   ].freeze
 
   # Guards the default client so two threads racing on the first call cannot each build one,

@@ -32,7 +32,7 @@ class SnapshotCacheTest < Minitest::Test
   def test_cold_lookup_fetches_only_the_requested_prompt_url
     client = build_client
 
-    assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model
+    assert_equal "openai/gpt-4o-mini", client.prompt("greeting").model
 
     assert_equal 1, @server.request_count
     request = @server.recorded.first
@@ -43,19 +43,19 @@ class SnapshotCacheTest < Minitest::Test
   def test_fresh_cache_hit_makes_no_http_call
     client = build_client
 
-    3.times { assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model }
+    3.times { assert_equal "openai/gpt-4o-mini", client.prompt("greeting").model }
 
     assert_equal 1, @server.request_count
   end
 
   def test_expired_cache_fetches_with_the_prompt_specific_etag
     client = build_client
-    client.use_case("greeting")
+    client.prompt("greeting")
     @state["greeting"][:etag] = "\"greeting-v2\""
     @state["greeting"][:body] = prompt_json("greeting", temperature: 0.9)
 
     @clock.advance(10.01)
-    assert_in_delta 0.9, client.use_case("greeting").params["temperature"]
+    assert_in_delta 0.9, client.prompt("greeting").params["temperature"]
 
     assert_equal 2, @server.request_count
     assert_equal "\"greeting-v1\"", @server.recorded.last.headers["if-none-match"]
@@ -63,45 +63,45 @@ class SnapshotCacheTest < Minitest::Test
 
   def test_failed_attempts_are_throttled_for_the_cache_ttl_and_serve_stale
     client = build_client
-    assert_in_delta 0.2, client.use_case("greeting").params["temperature"]
+    assert_in_delta 0.2, client.prompt("greeting").params["temperature"]
 
     @state["greeting"][:status] = 503
     @clock.advance(10.01)
 
-    3.times { assert_in_delta 0.2, client.use_case("greeting").params["temperature"] }
+    3.times { assert_in_delta 0.2, client.prompt("greeting").params["temperature"] }
 
     assert_equal 2, @server.request_count
-    assert_equal 1, client.use_case_document_status("greeting")[:failures]
+    assert_equal 1, client.prompt_document_status("greeting")[:failures]
   end
 
   def test_cold_failure_returns_a_normal_not_ready_error_and_is_rate_limited
     @state["greeting"][:status] = 503
     client = build_client
 
-    assert_raises(PromptOn::NotReadyError) { client.use_case("greeting") }
-    assert_raises(PromptOn::NotReadyError) { client.use_case("greeting") }
+    assert_raises(PromptOn::NotReadyError) { client.prompt("greeting") }
+    assert_raises(PromptOn::NotReadyError) { client.prompt("greeting") }
 
     assert_equal 1, @server.request_count
   end
 
   def test_304_revalidates_the_cached_prompt
     client = build_client
-    client.use_case("greeting")
+    client.prompt("greeting")
     @state["greeting"][:status] = 304
 
     @clock.advance(10.01)
-    assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model
+    assert_equal "openai/gpt-4o-mini", client.prompt("greeting").model
 
     assert_equal 2, @server.request_count
-    assert_equal "\"greeting-v1\"", client.use_case("greeting").etag
-    refute client.use_case_document_info[:stale]
+    assert_equal "\"greeting-v1\"", client.prompt("greeting").etag
+    refute client.prompt_document_info[:stale]
   end
 
   def test_304_without_a_cached_value_is_a_failure
     @state["greeting"][:status] = 304
     client = build_client
 
-    assert_raises(PromptOn::NotReadyError) { client.use_case("greeting") }
+    assert_raises(PromptOn::NotReadyError) { client.prompt("greeting") }
 
     assert_equal 1, @server.request_count
   end
@@ -110,7 +110,7 @@ class SnapshotCacheTest < Minitest::Test
     @state["greeting"][:status] = 500
     client = build_client
 
-    assert_raises(PromptOn::NotReadyError) { client.use_case("greeting") }
+    assert_raises(PromptOn::NotReadyError) { client.prompt("greeting") }
 
     assert_equal 1, @server.request_count
   end
@@ -132,7 +132,7 @@ class SnapshotCacheTest < Minitest::Test
     host = "http://127.0.0.1:#{closing_server.addr[1]}"
     client = build_client(host: host, config_fetch_timeout: 0.2)
 
-    assert_raises(PromptOn::NotReadyError) { client.use_case("greeting") }
+    assert_raises(PromptOn::NotReadyError) { client.prompt("greeting") }
 
     assert_equal :accepted, attempts.pop(true)
     assert_raises(ThreadError) { attempts.pop(true) }
@@ -153,13 +153,13 @@ class SnapshotCacheTest < Minitest::Test
       original_get_prompt.call(*args, **kwargs)
     end
 
-    assert_raises(PromptOn::NotReadyError) { client.use_case("greeting") }
-    assert_raises(PromptOn::NotReadyError) { client.use_case("greeting") }
+    assert_raises(PromptOn::NotReadyError) { client.prompt("greeting") }
+    assert_raises(PromptOn::NotReadyError) { client.prompt("greeting") }
     assert_equal 1, attempts
     assert_equal 0, @server.request_count
 
     @clock.advance(10.01)
-    assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model
+    assert_equal "openai/gpt-4o-mini", client.prompt("greeting").model
 
     assert_equal 2, attempts
     assert_equal 1, @server.request_count
@@ -167,26 +167,26 @@ class SnapshotCacheTest < Minitest::Test
 
   def test_one_second_total_timeout_serves_stale_and_discards_the_late_result
     client = build_client
-    client.use_case("greeting")
+    client.prompt("greeting")
     @state["greeting"][:delay] = 1.25
     @state["greeting"][:etag] = "\"greeting-v2\""
     @state["greeting"][:body] = prompt_json("greeting", temperature: 0.9)
 
     @clock.advance(10.01)
     started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-    assert_in_delta 0.2, client.use_case("greeting").params["temperature"]
+    assert_in_delta 0.2, client.prompt("greeting").params["temperature"]
     elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
 
     assert_operator elapsed, :<, 1.15
     sleep(0.3)
-    assert_in_delta 0.2, client.use_case("greeting").params["temperature"]
+    assert_in_delta 0.2, client.prompt("greeting").params["temperature"]
   end
 
   def test_same_prompt_concurrent_cold_requests_share_one_fetch
     @state["greeting"][:delay] = 0.05
     client = build_client
 
-    threads = Array.new(12) { Thread.new { client.use_case("greeting").model } }
+    threads = Array.new(12) { Thread.new { client.prompt("greeting").model } }
 
     assert_equal ["openai/gpt-4o-mini"], threads.map(&:value).uniq
     assert_equal 1, @server.request_count
@@ -197,10 +197,10 @@ class SnapshotCacheTest < Minitest::Test
     client = build_client
     summary_elapsed = nil
 
-    slow = Thread.new { client.use_case("greeting").model }
+    slow = Thread.new { client.prompt("greeting").model }
     fast = Thread.new do
       started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-      model = client.use_case("summarize").model
+      model = client.prompt("summarize").model
       summary_elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
       model
     end
@@ -214,60 +214,60 @@ class SnapshotCacheTest < Minitest::Test
 
   def test_scope_mismatch_is_rejected_without_replacing_stale_cache
     client = build_client
-    client.use_case("greeting")
+    client.prompt("greeting")
     @state["greeting"][:body] = prompt_json("greeting", project: "other")
     @state["greeting"][:etag] = "\"bad\""
 
     @clock.advance(10.01)
-    assert_in_delta 0.2, client.use_case("greeting").params["temperature"]
+    assert_in_delta 0.2, client.prompt("greeting").params["temperature"]
 
-    assert_equal "\"greeting-v1\"", client.use_case("greeting").etag
+    assert_equal "\"greeting-v1\"", client.prompt("greeting").etag
   end
 
   def test_disk_and_bundle_are_fallbacks_but_do_not_count_as_fresh_remote_validation
     File.write(bundle_path, prompt_json("greeting", temperature: 0.4))
     client = build_client(bundle: bundle_path)
 
-    assert_in_delta 0.2, client.use_case("greeting").params["temperature"]
+    assert_in_delta 0.2, client.prompt("greeting").params["temperature"]
 
     assert_equal 1, @server.request_count
-    assert_equal "remote", client.use_case("greeting").source
+    assert_equal "remote", client.prompt("greeting").source
   end
 
   def test_bundle_answers_when_prompton_is_unreachable
     File.write(bundle_path, prompt_json("greeting", temperature: 0.4))
     client = build_client(bundle: bundle_path, host: PromptOnTest::StubServer.dead_url)
 
-    assert_in_delta 0.4, client.use_case("greeting").params["temperature"]
-    assert_equal "bundle", client.use_case("greeting").source
+    assert_in_delta 0.4, client.prompt("greeting").params["temperature"]
+    assert_equal "bundle", client.prompt("greeting").source
   end
 
   def test_each_prompt_keeps_its_own_cache_and_etag
     client = build_client
-    client.use_case("greeting")
-    client.use_case("summarize")
+    client.prompt("greeting")
+    client.prompt("summarize")
     @state["greeting"][:etag] = "\"greeting-v2\""
     @state["greeting"][:body] = prompt_json("greeting", temperature: 0.8)
 
     @clock.advance(10.01)
-    assert_in_delta 0.8, client.use_case("greeting").params["temperature"]
+    assert_in_delta 0.8, client.prompt("greeting").params["temperature"]
 
     paths = @server.recorded.map(&:path)
     assert_equal 2, paths.count("/api/v1/prompts/greeting")
     assert_equal 1, paths.count("/api/v1/prompts/summarize")
-    assert_equal "\"summarize-v1\"", client.use_case("summarize").etag
+    assert_equal "\"summarize-v1\"", client.prompt("summarize").etag
   end
 
   def test_prompt_cache_keeps_an_immutable_document_per_key
     client = build_client
 
-    assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model
+    assert_equal "openai/gpt-4o-mini", client.prompt("greeting").model
 
     @state["summarize"][:etag] = "\"summarize-v2\""
     @state["summarize"][:body] = prompt_json_with_model("summarize", "openai/changed-model")
 
-    assert_equal "openai/changed-model", client.use_case("summarize").model
-    assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model
+    assert_equal "openai/changed-model", client.prompt("summarize").model
+    assert_equal "openai/gpt-4o-mini", client.prompt("greeting").model
 
     paths = @server.recorded.map(&:path)
     assert_equal 1, paths.count("/api/v1/prompts/greeting")
@@ -278,30 +278,30 @@ class SnapshotCacheTest < Minitest::Test
     disk_path = File.join(@dir, "cache.json")
     client = build_client(disk_cache: disk_path)
 
-    assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model
+    assert_equal "openai/gpt-4o-mini", client.prompt("greeting").model
     @state["summarize"][:etag] = "\"summarize-v2\""
     @state["summarize"][:body] = prompt_json_with_model("summarize", "openai/changed-model")
-    assert_equal "openai/changed-model", client.use_case("summarize").model
+    assert_equal "openai/changed-model", client.prompt("summarize").model
 
     @state["greeting"][:status] = 503
     @state["summarize"][:status] = 503
     restarted = build_client(disk_cache: disk_path)
 
-    assert_equal "openai/gpt-4o-mini", restarted.use_case("greeting").model
-    assert_equal "openai/changed-model", restarted.use_case("summarize").model
+    assert_equal "openai/gpt-4o-mini", restarted.prompt("greeting").model
+    assert_equal "openai/changed-model", restarted.prompt("summarize").model
   end
 
   def test_late_validation_result_does_not_install_after_the_deadline
     client = build_client
-    assert_in_delta 0.2, client.use_case("greeting").params["temperature"]
+    assert_in_delta 0.2, client.prompt("greeting").params["temperature"]
     @state["greeting"][:etag] = "\"greeting-v2\""
     @state["greeting"][:body] = prompt_json("greeting", temperature: 0.9)
     @clock.advance(10.01)
 
-    original_parse = PromptOn::UseCaseDocument.method(:parse)
+    original_parse = PromptOn::PromptDocument.method(:parse)
     advance_during_next_parse = true
     clock = @clock
-    PromptOn::UseCaseDocument.define_singleton_method(:parse) do |body|
+    PromptOn::PromptDocument.define_singleton_method(:parse) do |body|
       parsed = original_parse.call(body)
       if advance_during_next_parse
         advance_during_next_parse = false
@@ -310,20 +310,20 @@ class SnapshotCacheTest < Minitest::Test
       parsed
     end
 
-    assert_in_delta 0.2, client.use_case("greeting").params["temperature"]
-    assert_equal "\"greeting-v1\"", client.use_case("greeting").etag
+    assert_in_delta 0.2, client.prompt("greeting").params["temperature"]
+    assert_equal "\"greeting-v1\"", client.prompt("greeting").etag
   ensure
-    PromptOn::UseCaseDocument.define_singleton_method(:parse) { |body| original_parse.call(body) } if original_parse
+    PromptOn::PromptDocument.define_singleton_method(:parse) { |body| original_parse.call(body) } if original_parse
   end
 
   def test_export_writes_the_cached_prompt_document_as_a_bundle
     client = build_client
-    client.use_case("greeting")
+    client.prompt("greeting")
 
-    client.export_use_case_document(bundle_path)
+    client.export_prompt_document(bundle_path)
 
     offline = build_client(mode: :offline, api_key: nil, disk_cache: false, bundle: bundle_path)
-    assert_equal "bundle", offline.use_case("greeting").source
+    assert_equal "bundle", offline.prompt("greeting").source
   end
 
   def test_legacy_full_cache_can_merge_schema1_prompt_and_export_reloads_it
@@ -332,20 +332,20 @@ class SnapshotCacheTest < Minitest::Test
     @state["summarize"][:etag] = "\"schema1-summarize\""
     client = build_client(bundle: bundle_path)
 
-    assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model
-    assert_equal "openai/gpt-4o-mini", client.use_case("summarize").model
-    assert_equal "\"schema1-summarize\"", client.use_case("summarize").etag
+    assert_equal "openai/gpt-4o-mini", client.prompt("greeting").model
+    assert_equal "openai/gpt-4o-mini", client.prompt("summarize").model
+    assert_equal "\"schema1-summarize\"", client.prompt("summarize").etag
 
-    client.export_use_case_document(bundle_path)
+    client.export_prompt_document(bundle_path)
     exported = JSON.parse(File.read(bundle_path))
     offline = build_client(mode: :offline, api_key: nil, disk_cache: false, bundle: bundle_path)
 
     assert_equal 1, exported["schema_version"]
     assert exported.dig("prompts", "summarize"), "export should keep schema1 prompt under prompts"
-    assert_equal "bundle", offline.use_case("summarize").source
-    assert_equal 1, offline.use_case("summarize").prompt_version_number
+    assert_equal "bundle", offline.prompt("summarize").source
+    assert_equal 1, offline.prompt("summarize").prompt_version_number
     assert_equal [{ "role" => "user", "content" => "Say hello to Ada." }],
-                 offline.use_case("summarize").messages("name" => "Ada")
+                 offline.prompt("summarize").messages("name" => "Ada")
   end
 
   def test_two_schema1_prompt_fetches_merge_into_readable_export
@@ -355,10 +355,10 @@ class SnapshotCacheTest < Minitest::Test
     @state["summarize"][:etag] = "\"schema1-summarize\""
     client = build_client
 
-    assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model
-    assert_equal "openai/gpt-4o-mini", client.use_case("summarize").model
+    assert_equal "openai/gpt-4o-mini", client.prompt("greeting").model
+    assert_equal "openai/gpt-4o-mini", client.prompt("summarize").model
 
-    client.export_use_case_document(bundle_path)
+    client.export_prompt_document(bundle_path)
     exported = JSON.parse(File.read(bundle_path))
     offline = build_client(mode: :offline, api_key: nil, disk_cache: false, bundle: bundle_path)
 
@@ -366,8 +366,8 @@ class SnapshotCacheTest < Minitest::Test
     assert_equal %w[greeting summarize], exported.fetch("prompts").keys.sort
     assert_equal %w[greeting@1 summarize@1], exported.fetch("prompt_versions").keys.sort
     refute exported.key?("use_cases")
-    assert_equal "bundle", offline.use_case("greeting").source
-    assert_equal "bundle", offline.use_case("summarize").source
+    assert_equal "bundle", offline.prompt("greeting").source
+    assert_equal "bundle", offline.prompt("summarize").source
   end
 
   def test_schema1_prompt_fetch_preserves_readable_cache_and_export_shape
@@ -377,14 +377,14 @@ class SnapshotCacheTest < Minitest::Test
     disk_path = File.join(@dir, "cache.json")
     client = build_client(disk_cache: disk_path)
 
-    assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model
+    assert_equal "openai/gpt-4o-mini", client.prompt("greeting").model
 
     assert_equal body, File.read(disk_path)
-    client.export_use_case_document(bundle_path)
+    client.export_prompt_document(bundle_path)
     exported = JSON.parse(File.read(bundle_path))
     offline = build_client(mode: :offline, api_key: nil, disk_cache: false, bundle: bundle_path)
 
-    assert_equal "bundle", offline.use_case("greeting").source
+    assert_equal "bundle", offline.prompt("greeting").source
     assert_equal 1, exported["schema_version"]
     assert exported.key?("prompts")
     refute_match(/\b(id|model_id|template_pins|prompt_template_id)\b/, JSON.generate(exported))
@@ -397,23 +397,23 @@ class SnapshotCacheTest < Minitest::Test
     disk_path = File.join(@dir, "cache.json")
     client = build_client(disk_cache: disk_path)
 
-    assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model
+    assert_equal "openai/gpt-4o-mini", client.prompt("greeting").model
 
     assert_equal body, File.read(disk_path)
     assert_equal 1, JSON.parse(File.read(disk_path))["schema_version"]
 
-    client.export_use_case_document(bundle_path)
+    client.export_prompt_document(bundle_path)
     assert_equal body, File.read(bundle_path)
     offline = build_client(mode: :offline, api_key: nil, disk_cache: false, bundle: bundle_path)
 
-    assert_equal "bundle", offline.use_case("greeting").source
-    assert_equal "Say hello to Ada.", offline.use_case("greeting").messages("name" => "Ada").last["content"]
+    assert_equal "bundle", offline.prompt("greeting").source
+    assert_equal "Say hello to Ada.", offline.prompt("greeting").messages("name" => "Ada").last["content"]
   end
 
   private
 
   def bundle_path
-    File.join(@dir, "use-cases.production.json")
+    File.join(@dir, "prompts.production.json")
   end
 
   def build_client(**overrides)

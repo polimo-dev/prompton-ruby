@@ -18,9 +18,9 @@ class ClientTest < Minitest::Test
 
   def test_test_mode_makes_no_http_calls_and_captures_the_records
     client = build_client(mode: :test, host: PromptOnTest::StubServer.dead_url)
-    client.put_use_case_document(snapshot_document)
+    client.put_prompt_document(snapshot_document)
 
-    resolution = client.use_case("greeting")
+    resolution = client.prompt("greeting")
     resolution.track(variables: { name: "Ada" }) { "hello" }
 
     assert_equal 1, client.logged.length
@@ -29,24 +29,24 @@ class ClientTest < Minitest::Test
     assert_equal({ captured: 1 }, client.flush)
   end
 
-  def test_stub_builds_a_snapshot_for_one_use_case_and_accumulates
+  def test_stub_builds_a_snapshot_for_one_prompt_and_accumulates
     client = build_client(mode: :test)
     client.stub("greeting", model: "openai/gpt-4o-mini",
                             messages: [{ "role" => "user", "content" => "Hi {{ name }}" }],
                             params: { "temperature" => 0.3 })
     client.stub("summarize", model: "openai/gpt-4o-mini", kind: "text", text: "Sum {{ n }}")
 
-    assert_equal ["default"], client.prompt_names("greeting")
+    assert_equal ["default"], client.template_names("greeting")
     assert_equal [{ "role" => "user", "content" => "Hi Ada" }],
-                 client.use_case("greeting").messages(name: "Ada")
-    assert_equal({ "temperature" => 0.3 }, client.use_case("greeting").params)
-    assert_equal "Sum 2", client.use_case("summarize").text(n: 2)
+                 client.prompt("greeting").messages(name: "Ada")
+    assert_equal({ "temperature" => 0.3 }, client.prompt("greeting").params)
+    assert_equal "Sum 2", client.prompt("summarize").text(n: 2)
   end
 
   def test_clear_logs_empties_the_capture
     client = build_client(mode: :test)
     client.stub("greeting", model: "m", messages: [{ "role" => "user", "content" => "hi" }])
-    client.use_case("greeting").track { "x" }
+    client.prompt("greeting").track { "x" }
 
     client.clear_logs
 
@@ -56,20 +56,20 @@ class ClientTest < Minitest::Test
   # --- offline mode --------------------------------------------------------
 
   def test_offline_mode_reads_the_bundle_and_never_calls_out
-    bundle = File.join(@dir, "use-cases.production.json")
+    bundle = File.join(@dir, "prompts.production.json")
     File.write(bundle, snapshot_json)
     client = build_client(mode: :offline, bundle: bundle, host: PromptOnTest::StubServer.dead_url)
 
-    assert_equal "bundle", client.use_case("greeting").source
+    assert_equal "bundle", client.prompt("greeting").source
     assert_equal({ discarded: 0 }, client.flush)
   end
 
   def test_without_an_api_key_the_sdk_says_so_once_and_works_from_the_bundle
-    bundle = File.join(@dir, "use-cases.production.json")
+    bundle = File.join(@dir, "prompts.production.json")
     File.write(bundle, snapshot_json)
     client = build_client(api_key: nil, project: "sdkfixture", bundle: bundle)
 
-    assert_equal "bundle", client.use_case("greeting").source
+    assert_equal "bundle", client.prompt("greeting").source
     announcements = @logger.lines.count { |line| line.include?("no API key configured") }
     assert_equal 1, announcements
 
@@ -84,7 +84,7 @@ class ClientTest < Minitest::Test
   def test_log_fills_the_id_and_sdk_fields_and_keeps_the_started_at_it_was_given
     client = build_client(mode: :test)
     started_at = (Time.now.utc - 300).iso8601(6)
-    logged = client.log("use_case" => "greeting", "model" => "m", "status" => "ok",
+    logged = client.log("prompt_key" => "greeting", "model" => "m", "status" => "ok",
                         "started_at" => started_at)
 
     assert_match(/\A\h{8}-\h{4}-7\h{3}-/, logged["id"])
@@ -97,23 +97,23 @@ class ClientTest < Minitest::Test
 
     error = assert_raises(PromptOn::InvalidRecordError) { client.log("model" => "m", "status" => "ok") }
     assert_equal "prompt_key", error.field
-    assert_raises(PromptOn::InvalidRecordError) { client.log("use_case" => "greeting", "status" => "ok") }
+    assert_raises(PromptOn::InvalidRecordError) { client.log("prompt" => "greeting", "status" => "ok") }
 
     # started_at is never guessed: a record for a provider call that ran minutes ago would otherwise
     # be stamped with the enqueue time and quietly corrupt every latency and time series.
     missing = assert_raises(PromptOn::InvalidRecordError) do
-      client.log("use_case" => "greeting", "model" => "m", "status" => "ok")
+      client.log("prompt" => "greeting", "model" => "m", "status" => "ok")
     end
     assert_equal "started_at", missing.field
   end
 
-  def test_log_takes_the_use_case_evidence_from_a_use_case
+  def test_log_takes_the_prompt_evidence_from_a_prompt
     client = build_client(mode: :test)
-    client.put_use_case_document(snapshot_document)
-    resolution = client.use_case("greeting")
+    client.put_prompt_document(snapshot_document)
+    resolution = client.prompt("greeting")
 
     logged = client.log({ "status" => "ok", "started_at" => Time.now.utc.iso8601(6) },
-                        use_case_evidence: resolution)
+                        prompt_evidence: resolution)
 
     assert_equal "greeting", logged["prompt_key"]
     assert_equal "default", logged["template"]
@@ -141,7 +141,7 @@ class ClientTest < Minitest::Test
 
   def test_symbol_keys_are_accepted_and_normalised
     client = build_client(mode: :test)
-    logged = client.log(use_case: "greeting", model: "m", status: "ok",
+    logged = client.log(prompt_key: "greeting", model: "m", status: "ok",
                         started_at: Time.now.utc.iso8601(6), context: { language: "ko" })
 
     assert_equal({ "language" => "ko" }, logged["context"])
@@ -152,11 +152,11 @@ class ClientTest < Minitest::Test
     document["prompts"]["greeting"]["payload_policy"] =
       { "mode" => "hash", "sample_rate" => 1.0, "max_bytes" => 262_144 }
     client = build_client(mode: :test)
-    client.put_use_case_document(document)
+    client.put_prompt_document(document)
 
     logged = client.log({ "status" => "ok", "input" => "secret prompt",
                           "started_at" => Time.now.utc.iso8601(6) },
-                        use_case_evidence: client.use_case("greeting"))
+                        prompt_evidence: client.prompt("greeting"))
 
     assert_equal %w[bytes hashed sha256], logged["input"].keys.sort
     refute_includes JSON.generate(logged), "secret prompt"
@@ -166,7 +166,7 @@ class ClientTest < Minitest::Test
     client = build_client(mode: :test, hash_end_user: true,
                           redact: ->(gen) { gen.merge("metadata" => { "redacted" => true }) })
 
-    logged = client.log("use_case" => "greeting", "model" => "m", "status" => "ok",
+    logged = client.log("prompt_key" => "greeting", "model" => "m", "status" => "ok",
                         "started_at" => Time.now.utc.iso8601(6), "end_user_ref" => "user-42")
 
     assert_equal Digest::SHA256.hexdigest("user-42"), logged["end_user_ref"]
@@ -179,13 +179,13 @@ class ClientTest < Minitest::Test
       seen << gen
       gen
     })
-    client.put_use_case_document(snapshot_document)
+    client.put_prompt_document(snapshot_document)
     failure = PromptOn::Failure.new(
       kind: "transport",
       message: "failed to send request: %Req.TransportError{reason: :closed}"
     )
 
-    returned = client.use_case("greeting").track { failure }
+    returned = client.prompt("greeting").track { failure }
 
     assert_same failure, returned
     assert_empty client.logged
@@ -194,9 +194,9 @@ class ClientTest < Minitest::Test
 
   def test_other_transport_errors_are_still_logged
     client = build_client(mode: :test)
-    client.put_use_case_document(snapshot_document)
+    client.put_prompt_document(snapshot_document)
 
-    client.use_case("greeting").track do
+    client.prompt("greeting").track do
       PromptOn::Failure.new(kind: "transport", message: "connection refused")
     end
 
@@ -209,8 +209,8 @@ class ClientTest < Minitest::Test
 
   def test_track_times_the_call_and_returns_the_block_value_unchanged
     client = build_client(mode: :test)
-    client.put_use_case_document(snapshot_document)
-    resolution = client.use_case("greeting")
+    client.put_prompt_document(snapshot_document)
+    resolution = client.prompt("greeting")
     variables = { name: "Ada" }
     managed_messages = resolution.messages(variables)
     app_history = [{ "role" => "assistant", "content" => "Previous answer." }]
@@ -244,11 +244,11 @@ class ClientTest < Minitest::Test
 
   def test_messages_prompt_selection_is_used_by_later_track_evidence
     client = build_client(mode: :test)
-    client.put_use_case_document(snapshot_document)
-    use_case = client.use_case("greeting")
+    client.put_prompt_document(snapshot_document)
+    prompt = client.prompt("greeting")
 
-    messages = use_case.messages({ name: "Ada" })
-    use_case.track(variables: { name: "Ada" }, input_messages: messages) { { content: "안녕" } }
+    messages = prompt.messages({ name: "Ada" })
+    prompt.track(variables: { name: "Ada" }, input_messages: messages) { { content: "안녕" } }
 
     logged = client.logged.first
     assert_equal "default", logged["template"]
@@ -259,10 +259,10 @@ class ClientTest < Minitest::Test
 
   def test_a_failure_is_logged_with_its_kind_and_status_without_raising
     client = build_client(mode: :test)
-    client.put_use_case_document(snapshot_document)
+    client.put_prompt_document(snapshot_document)
     failure = PromptOn::Failure.new(kind: "rate_limited", status: 429, message: "slow down")
 
-    returned = client.use_case("greeting").track { failure }
+    returned = client.prompt("greeting").track { failure }
 
     assert_same failure, returned
     logged = client.logged.first
@@ -272,12 +272,12 @@ class ClientTest < Minitest::Test
 
   def test_a_failure_can_keep_the_usage_and_output_it_carries
     client = build_client(mode: :test)
-    client.put_use_case_document(snapshot_document)
+    client.put_prompt_document(snapshot_document)
     failure = PromptOn::Failure.new(kind: "parse", message: "unexpected end of JSON input",
                                     result: { content: "{\"greeting\":", finish_reason: "length",
                                               usage: { input_tokens: 38, output_tokens: 512 } })
 
-    client.use_case("greeting").track { failure }
+    client.prompt("greeting").track { failure }
 
     logged = client.logged.first
     assert_equal "error", logged["status"]
@@ -288,10 +288,10 @@ class ClientTest < Minitest::Test
 
   def test_an_exception_is_logged_as_an_app_error_and_re_raised_unchanged
     client = build_client(mode: :test)
-    client.put_use_case_document(snapshot_document)
+    client.put_prompt_document(snapshot_document)
     raised = ArgumentError.new("provider client blew up")
 
-    error = assert_raises(ArgumentError) { client.use_case("greeting").track { raise raised } }
+    error = assert_raises(ArgumentError) { client.prompt("greeting").track { raise raised } }
 
     assert_same raised, error
     logged = client.logged.first
@@ -302,17 +302,17 @@ class ClientTest < Minitest::Test
 
   def test_an_unknown_error_kind_falls_back_to_app
     client = build_client(mode: :test)
-    client.put_use_case_document(snapshot_document)
+    client.put_prompt_document(snapshot_document)
 
-    client.use_case("greeting").track { PromptOn::Failure.new(kind: "weird") }
+    client.prompt("greeting").track { PromptOn::Failure.new(kind: "weird") }
 
     assert_equal "app", client.logged.first.dig("error", "kind")
   end
 
   def test_a_log_that_cannot_be_built_never_breaks_the_provider_call
     client = build_client(mode: :test)
-    client.put_use_case_document(snapshot_document)
-    resolution = client.use_case("greeting")
+    client.put_prompt_document(snapshot_document)
+    resolution = client.prompt("greeting")
     def client.log(*)
       raise "log failed"
     end
@@ -349,7 +349,7 @@ class ClientTest < Minitest::Test
     PromptOn.configure(**client_options(mode: :test, logger: @logger))
     PromptOn.stub("greeting", model: "m", messages: [{ "role" => "user", "content" => "Hi {{ n }}" }])
 
-    assert_equal [{ "role" => "user", "content" => "Hi 1" }], PromptOn.use_case("greeting").messages(n: 1)
+    assert_equal [{ "role" => "user", "content" => "Hi 1" }], PromptOn.prompt("greeting").messages(n: 1)
 
     PromptOn.reset!
     assert_nil PromptOn.instance_variable_get(:@client)
@@ -375,13 +375,11 @@ class ClientTest < Minitest::Test
                      "events" => [{ **trace_event, "sdk" => { "name" => "prompton-ruby",
                                                               "version" => PromptOn::VERSION } }] },
                    request.json)
-      [202, { "Content-Type" => "application/json" },
-       { accepted: 1, duplicates: 0, rejected: [],
-         events: { accepted: 2, duplicates: 0, rejected: [] } }]
+      [202, { "Content-Type" => "application/json" }, { accepted: 1, duplicates: 0, rejected: [] }]
     end
     client = build_client(mode: :live, host: server.url, environment: "staging")
 
-    assert_equal({ accepted: 2, duplicates: 0, rejected: [] }, client.log_events([trace_event]))
+    assert_equal({ accepted: 1, duplicates: 0, rejected: [] }, client.log_events([trace_event]))
     assert_equal 1, server.request_count
   ensure
     server&.stop

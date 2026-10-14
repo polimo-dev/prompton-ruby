@@ -7,7 +7,7 @@ class ToolPromptSchemaTest < Minitest::Test
   SLOT_ERROR = "Message slots are not supported; compose conversation history in app code."
 
   def test_schema1_tools_are_preserved_and_message_slots_are_rejected
-    document = PromptOn::UseCaseDocument.from_hash(
+    document = PromptOn::PromptDocument.from_hash(
       "schema_version" => 1,
       "prompts" => { "chat" => { "kind" => "chat", "default_params" => {} } },
       "deployments" => {
@@ -98,7 +98,7 @@ class ToolPromptSchemaTest < Minitest::Test
 
   def test_preview_http_contract_slot_fixture_is_rejected_and_tools_survive
     fixture = JSON.parse(File.read(File.join(__dir__, "conformance", "http_contract.json")))
-    document = PromptOn::UseCaseDocument.from_hash(fixture["snapshot"])
+    document = PromptOn::PromptDocument.from_hash(fixture["snapshot"])
     evidence = PromptOn::Resolver.resolve(document, fixture["render"]["key"])
 
     error = assert_raises(PromptOn::TemplateRenderError) do
@@ -117,7 +117,7 @@ class ToolPromptSchemaTest < Minitest::Test
   end
 
   def test_schema1_readable_references_resolve_without_resource_ids
-    document = PromptOn::UseCaseDocument.from_hash(
+    document = PromptOn::PromptDocument.from_hash(
       "schema_version" => 1,
       "project" => "p",
       "environment" => "staging",
@@ -175,11 +175,11 @@ class ToolPromptSchemaTest < Minitest::Test
   end
 
   def test_schema1_single_prompt_response_normalizes_to_readable_prompt_document
-    document = PromptOn::UseCaseDocument.from_hash(schema1_single_prompt_document)
+    document = PromptOn::PromptDocument.from_hash(schema1_single_prompt_document)
     support = PromptOn::Resolver.resolve(document, "support_reply")
 
     assert_equal 1, document.schema_version
-    assert_equal ["support_reply"], document.use_case_keys
+    assert_equal ["support_reply"], document.prompt_keys
     assert_equal "anthropic/claude-sonnet-4", support.model
     assert_equal "openrouter", support.provider
     assert_equal "v2026.10.14-1", support.deployment_revision
@@ -203,7 +203,7 @@ class ToolPromptSchemaTest < Minitest::Test
         "prompt_version" => 1, "api" => "decisions", "request_path" => "/api/v1/systemone"
       }
     )
-    document = PromptOn::UseCaseDocument.from_hash(body)
+    document = PromptOn::PromptDocument.from_hash(body)
     evidence = PromptOn::Resolver.resolve(document, "decision_triage")
     version = document.prompt_versions.fetch("decision_triage@1")
 
@@ -225,15 +225,15 @@ class ToolPromptSchemaTest < Minitest::Test
      end],
      ["float schema", schema1_single_prompt_document.merge("schema_version" => 1.0)],
      ["missing prompt", schema1_single_prompt_document.except("prompt")]].each do |name, body|
-      assert_raises(PromptOn::InvalidUseCaseDocumentError, name) do
-        PromptOn::UseCaseDocument.from_hash(body)
+      assert_raises(PromptOn::InvalidPromptDocumentError, name) do
+        PromptOn::PromptDocument.from_hash(body)
       end
     end
   end
 
   def test_schema1_prompt_version_pin_must_be_positive
-    error = assert_raises(PromptOn::InvalidUseCaseDocumentError) do
-      PromptOn::UseCaseDocument.from_hash(
+    error = assert_raises(PromptOn::InvalidPromptDocumentError) do
+      PromptOn::PromptDocument.from_hash(
         "schema_version" => 1,
         "prompts" => { "chat" => { "kind" => "chat" } },
         "deployments" => { "chat" => { "revision" => "v2026.10.14-1", "provider" => "openrouter",
@@ -272,8 +272,8 @@ class ToolPromptSchemaTest < Minitest::Test
       document = Marshal.load(Marshal.dump(valid))
       document.dig(*path[0...-1])[path.last] = value
 
-      error = assert_raises(PromptOn::InvalidUseCaseDocumentError, name) do
-        PromptOn::UseCaseDocument.from_hash(document)
+      error = assert_raises(PromptOn::InvalidPromptDocumentError, name) do
+        PromptOn::PromptDocument.from_hash(document)
       end
       assert_match(/schema1/, error.message)
     end
@@ -299,8 +299,8 @@ class ToolPromptSchemaTest < Minitest::Test
       }
     }
 
-    error = assert_raises(PromptOn::InvalidUseCaseDocumentError) do
-      PromptOn::UseCaseDocument.from_hash(document)
+    error = assert_raises(PromptOn::InvalidPromptDocumentError) do
+      PromptOn::PromptDocument.from_hash(document)
     end
     assert_match(/must not include template_pins/, error.message)
   end

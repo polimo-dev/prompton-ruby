@@ -20,14 +20,14 @@ use_case.track { … }               ──▶ the provider call, timed and logg
 
 ## Install
 
-Not published to RubyGems yet, so depend on the repository:
+Install the v0.6.0 GitHub source release:
 
 ```ruby
 # Gemfile
-gem "prompton-sdk", github: "polimo-dev/prompton-ruby"
+gem "prompton-sdk", github: "polimo-dev/prompton-ruby", tag: "v0.6.0"
 ```
 
-Once published, the line becomes `gem "prompton-sdk", "~> 0.5"`. Requires Ruby 3.2 or newer.
+Requires Ruby 3.2 or newer.
 
 ## Quick start
 

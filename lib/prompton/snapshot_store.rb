@@ -362,18 +362,22 @@ module PromptOn
         "deployments" => data.deployments.transform_values do |deployment|
           { "id" => deployment.id, "use_case_key" => deployment.use_case_key,
             "revision" => deployment.revision, "model_id" => deployment.model_id,
+            "provider" => deployment.provider, "model" => deployment.model,
+            "prompt_version" => deployment.prompt_version,
             "params" => deployment.params, "provider_options" => deployment.provider_options,
             "prompt_pins" => deployment.prompt_pins, "api" => deployment.api,
             "request_path" => deployment.request_path }.compact
         end,
         "prompt_versions" => data.prompt_versions.transform_values do |version|
-          { "id" => version.id, "prompt_id" => version.prompt_id, "number" => version.number,
+          { "id" => version.id, "prompt_id" => version.prompt_id, "prompt" => version.prompt,
+            "number" => version.number,
             "engine" => version.engine, "messages" => version.messages,
             "text_template" => version.text_template, "kind" => version.kind,
             "decision" => version.decision, "tools" => version.tools }.compact
         end,
         "models" => data.models.transform_values do |model|
           { "id" => model.id, "provider" => model.provider, "model_id" => model.model_id,
+            "model" => model.model_id,
             "display_name" => model.display_name, "metadata" => model.metadata,
             "provider_options" => model.provider_options, "capabilities" => model.capabilities,
             "pricing" => model.pricing, "context_length" => model.context_length,

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.0
+
+- Added schema8 prompt documents with readable resource references. Config now resolves
+  `prompt@version` prompt versions and `provider:model` model keys while keeping legacy schema4-7
+  documents loadable.
+- Schema8 deployments no longer need public deployment, prompt version or model UUIDs. Deprecated
+  local evidence fields stay nil when the document does not carry ids, while readable
+  `deployment_revision`, `prompt`, `prompt_version_number`, `provider` and `model` remain available
+  for monitoring logs.
+- Validates schema8 `prompt_version` pins as positive integers and keeps prompt-version lookup
+  scoped by prompt key so equal version numbers on different prompts do not collide.
+
 ## 0.6.0
 
 - Monitoring logs now send readable prompt evidence: `use_case`, `deployment_revision`,

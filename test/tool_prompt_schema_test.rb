@@ -115,4 +115,75 @@ class ToolPromptSchemaTest < Minitest::Test
     refute evidence.tools["parallel_tool_calls"]
     assert_equal "object", evidence.tools["definitions"].first["output_schema"]["type"]
   end
+
+  def test_schema8_readable_references_resolve_without_resource_ids
+    document = PromptOn::UseCaseDocument.from_hash(
+      "schema_version" => 8,
+      "project" => "p",
+      "environment" => "staging",
+      "prompts" => {
+        "support_reply" => { "kind" => "chat", "default_params" => { "max_tokens" => 100 } },
+        "triage" => { "kind" => "chat", "default_params" => {} }
+      },
+      "deployments" => {
+        "support_reply" => {
+          "revision" => "v2026.10.14-1", "provider" => "openrouter",
+          "model" => "google/gemini-3.8-flash", "prompt_version" => 2,
+          "params" => { "temperature" => 0.3 }, "provider_options" => { "allow_fallbacks" => false }
+        },
+        "triage" => {
+          "revision" => "v2026.10.14-2", "provider" => "anthropic",
+          "model" => "google/gemini-3.8-flash", "prompt_version" => 2
+        }
+      },
+      "prompt_versions" => {
+        "support_reply@2" => {
+          "prompt" => "support_reply", "number" => 2, "kind" => "chat", "engine" => "liquid",
+          "messages" => [{ "role" => "user", "content" => "Reply to {{ question }}" }]
+        },
+        "triage@2" => {
+          "prompt" => "triage", "number" => 2, "kind" => "chat", "engine" => "liquid",
+          "messages" => [{ "role" => "system", "content" => "Classify only" }]
+        }
+      },
+      "models" => {
+        "openrouter:google/gemini-3.8-flash" => {
+          "provider" => "openrouter", "model" => "google/gemini-3.8-flash",
+          "provider_options" => { "only" => ["Google"] }
+        },
+        "anthropic:google/gemini-3.8-flash" => {
+          "provider" => "anthropic", "model" => "google/gemini-3.8-flash",
+          "provider_options" => { "routing" => "direct" }
+        }
+      }
+    )
+
+    support = PromptOn::Resolver.resolve(document, "support_reply")
+    triage = PromptOn::Resolver.resolve(document, "triage")
+
+    assert_equal 8, document.schema_version
+    assert_nil support.deployment_id
+    assert_nil support.prompt_version_id
+    assert_nil support.model_id
+    assert_equal 2, support.prompt_version_number
+    assert_equal "google/gemini-3.8-flash", support.model
+    assert_equal "openrouter", support.provider
+    assert_equal({ "allow_fallbacks" => false, "only" => ["Google"] }, support.provider_options)
+    assert_equal "Reply to Ada", support.render("question" => "Ada").last["content"]
+    assert_equal "anthropic", triage.provider
+    assert_equal({ "routing" => "direct" }, triage.provider_options)
+  end
+
+  def test_schema8_prompt_version_pin_must_be_positive
+    error = assert_raises(PromptOn::InvalidUseCaseDocumentError) do
+      PromptOn::UseCaseDocument.from_hash(
+        "schema_version" => 8,
+        "prompts" => { "chat" => { "kind" => "chat" } },
+        "deployments" => { "chat" => { "revision" => "v2026.10.14-1", "provider" => "openrouter",
+                                       "model" => "openai/gpt-4o-mini", "prompt_version" => 0 } }
+      )
+    end
+
+    assert_match(/prompt_version must be a positive integer/, error.message)
+  end
 end

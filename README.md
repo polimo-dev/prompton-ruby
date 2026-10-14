@@ -20,11 +20,11 @@ use_case.track { … }               ──▶ the provider call, timed and logg
 
 ## Install
 
-Install the v0.6.0 GitHub source release:
+Install the v0.7.0 GitHub source release:
 
 ```ruby
 # Gemfile
-gem "prompton-sdk", github: "polimo-dev/prompton-ruby", tag: "v0.6.0"
+gem "prompton-sdk", github: "polimo-dev/prompton-ruby", tag: "v0.7.0"
 ```
 
 Requires Ruby 3.2 or newer.
@@ -185,17 +185,17 @@ A log must never fail because PromptOn did. Config is stale in the worst case, n
 use_case = PromptOn.use_case("diary_generation", prompt: "ko")
 
 use_case.model               # "anthropic/claude-sonnet-4" — the provider model string
-use_case.model_id            # the catalog UUID
+use_case.model_id            # deprecated local cache evidence; nil for schema8 readable configs
 use_case.provider            # "openrouter"
 use_case.params              # use_case.default_params <- deployment.params
 use_case.provider_options    # model.provider_options   <- deployment.provider_options
-use_case.kind                # "chat" | "text" | "embedding"
+use_case.kind                # "chat" | "decision" | "text" | "embedding"
 use_case.prompt              # "ko"
 use_case.prompt_names        # ["default", "ko"]
-use_case.deployment_id       # the pin this call came from …
-use_case.deployment_revision # … and its revision, e.g. "v2026.09.30-1"
-use_case.prompt_version_id   # the immutable version …
-use_case.prompt_version_number
+use_case.deployment_id       # deprecated local cache evidence; nil for schema8 readable configs
+use_case.deployment_revision # the pin revision, e.g. "v2026.10.14-1"
+use_case.prompt_version_id   # deprecated local cache evidence; nil for schema8 readable configs
+use_case.prompt_version_number # the immutable prompt version number
 use_case.source              # "remote" | "disk" | "bundle" | "manual"
 use_case.messages_template   # the raw chat templates (nil for text/embedding)
 use_case.text_template       # the raw text template (nil for chat/embedding)
@@ -302,7 +302,7 @@ earlier than the call to `log` (a stream that has just finished, a background sc
 | `usage` | `{input_tokens, output_tokens, cost_usd, cost_source, raw}` |
 | `trace_id`, `sequence`, `end_user_ref` | your correlation ids |
 | `context`, `metadata` | free-form tags; keep them under 2 KB and 4 KB or the record is rejected |
-| `sdk` | `{"name" => "prompton-ruby", "version" => "0.6.0"}` |
+| `sdk` | `{"name" => "prompton-ruby", "version" => "0.7.0"}` |
 
 `PromptOn::StopKind.normalize(finish_reason)` is the same table the server uses. Only `length`
 counts as truncated — `tool_calls` is not a truncation.

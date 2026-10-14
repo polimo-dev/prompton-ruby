@@ -24,7 +24,7 @@ messages = managed_messages +
            [{ "role" => "user", "content" => "Say hello to #{variables[:name]}." }]
 
 puts "model:    #{use_case.model} (#{use_case.provider})"
-puts "pin:      deployment #{use_case.deployment_id} revision #{use_case.deployment_revision}"
+puts "pin:      revision #{use_case.deployment_revision}"
 puts "prompt:   #{use_case.prompt} (version #{use_case.prompt_version_number}) " \
      "of #{use_case.prompt_names.join(", ")}"
 puts "params:   #{use_case.params}"

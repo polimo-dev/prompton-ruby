@@ -95,7 +95,8 @@ module PromptOn
         "deployment" => { "id" => deployment_id, "revision" => deployment_revision },
         "model" => model, "model_id" => model_id, "provider" => provider,
         "params" => params, "provider_options" => provider_options,
-        "prompt_version" => prompt_version_id && { "id" => prompt_version_id, "number" => prompt_version_number },
+        "prompt_version" => prompt_version_number && { "id" => prompt_version_id,
+                                                       "number" => prompt_version_number }.compact,
         "messages" => @messages, "text" => @text, "api" => api, "request_path" => request_path,
         "tools" => tools, "source" => source, "etag" => etag, "warnings" => warnings.map(&:to_s) }.compact
     end

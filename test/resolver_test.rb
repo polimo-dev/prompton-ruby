@@ -79,7 +79,7 @@ class ResolverTest < Minitest::Test
   end
 
   def test_schema_version_accepts_current_and_legacy_supported_versions
-    [3, 9].each do |version|
+    [3, 10].each do |version|
       error = assert_raises(PromptOn::UnsupportedSchemaVersionError) do
         PromptOn::UseCaseDocument.from_hash(snapshot_document.merge("schema_version" => version))
       end

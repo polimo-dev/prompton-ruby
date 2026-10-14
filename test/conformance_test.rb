@@ -76,7 +76,7 @@ class ConformanceTest < Minitest::Test
   def test_every_conformance_document_decodes_as_schema_v4
     conformance("prompt.json")["documents"].each do |reference, raw|
       data = PromptOn::UseCaseDocument.from_hash(raw)
-      assert_includes [4, 5, 6, PromptOn::UseCaseDocument::SCHEMA_VERSION], data.schema_version, reference
+      assert_includes [4, 5, 6, 8, PromptOn::UseCaseDocument::SCHEMA_VERSION], data.schema_version, reference
     end
   end
 

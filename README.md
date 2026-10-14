@@ -20,11 +20,11 @@ use_case.track { … }               ──▶ the provider call, timed and logg
 
 ## Install
 
-Install the v0.7.0 GitHub source release:
+Install the v0.7.1 GitHub source release:
 
 ```ruby
 # Gemfile
-gem "prompton-sdk", github: "polimo-dev/prompton-ruby", tag: "v0.7.0"
+gem "prompton-sdk", github: "polimo-dev/prompton-ruby", tag: "v0.7.1"
 ```
 
 Requires Ruby 3.2 or newer.
@@ -302,7 +302,7 @@ earlier than the call to `log` (a stream that has just finished, a background sc
 | `usage` | `{input_tokens, output_tokens, cost_usd, cost_source, raw}` |
 | `trace_id`, `sequence`, `end_user_ref` | your correlation ids |
 | `context`, `metadata` | free-form tags; keep them under 2 KB and 4 KB or the record is rejected |
-| `sdk` | `{"name" => "prompton-ruby", "version" => "0.7.0"}` |
+| `sdk` | `{"name" => "prompton-ruby", "version" => "0.7.1"}` |
 
 `PromptOn::StopKind.normalize(finish_reason)` is the same table the server uses. Only `length`
 counts as truncated — `tool_calls` is not a truncation.

@@ -108,7 +108,7 @@ module PromptOn
       entry = nil
       @mutex.synchronize do
         had_entry = !@entry.nil?
-        merged = merge_documents(@entry&.data, data, key)
+        merged = had_entry ? merge_documents(@entry.data, data, key) : data
         merged_body = had_entry ? JSON.generate(document_to_h(merged)) : body
         @prompt_meta[key] = { etag: etag, last_modified: last_modified, source: "remote",
                               fetched_at: now, stale_since: nil }
@@ -354,7 +354,7 @@ module PromptOn
     end
 
     def base_document(data)
-      { "schema_version" => data.schema_version, "project" => data.project,
+      { "schema_version" => data.schema_version == 9 ? 8 : data.schema_version, "project" => data.project,
         "environment" => data.environment, "use_cases" => {}, "deployments" => {},
         "prompt_versions" => {}, "models" => {} }
     end
@@ -400,7 +400,7 @@ module PromptOn
 
     def schema8_document_to_h(data)
       {
-        "schema_version" => data.schema_version,
+        "schema_version" => data.schema_version == 9 ? 8 : data.schema_version,
         "project" => data.project,
         "environment" => data.environment,
         "prompts" => data.use_cases.transform_values do |use_case|

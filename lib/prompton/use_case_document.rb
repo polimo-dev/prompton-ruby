@@ -20,7 +20,7 @@ module PromptOn
     def initialize(schema_version)
       @schema_version = schema_version
       super("use-case document schema version #{schema_version} is not supported " \
-            "(this SDK reads versions 4-#{UseCaseDocument::SCHEMA_VERSION})")
+            "(this SDK reads versions 4-#{UseCaseDocument::SCHEMA_VERSION} and schema9 single prompt responses)")
     end
 
     def code
@@ -35,12 +35,13 @@ module PromptOn
     end
   end
 
-  # The decoded `GET /use-cases`/`GET /prompts` document (schema v4-v8).
+  # The decoded `GET /use-cases`/`GET /prompts` document (schema v4-v8), plus
+  # schema9 single-prompt responses normalized at this boundary.
   #
   # A deployment revision is a pin, not a router: one revision is one model plus one pinned
   # prompt version per prompt name. v1 and v2 documents are refused.
   class UseCaseDocument
-    SCHEMA_VERSION = 8
+    SCHEMA_VERSION = 9
     KINDS = %w[chat decision text embedding].freeze
     ENGINES = %w[liquid raw].freeze
     PAYLOAD_MODES = %w[full hash none].freeze
@@ -83,6 +84,7 @@ module PromptOn
 
     def initialize(document)
       @warnings = []
+      document = normalize_single_prompt_document(document)
       @schema_version = check_schema_version(document)
       @project = string_or_nil(document["project"])
       @environment = string_or_nil(document["environment"])
@@ -118,6 +120,65 @@ module PromptOn
       return version if (4..SCHEMA_VERSION).include?(version)
 
       raise UnsupportedSchemaVersionError, version
+    end
+
+    def normalize_single_prompt_document(document)
+      return document unless document["schema_version"].is_a?(Integer) && document["schema_version"] == 9
+
+      if %w[use_cases prompts deployments prompt_versions models].any? { |field| document.key?(field) }
+        raise InvalidUseCaseDocumentError, "schema9 single prompt document must not include bulk collections"
+      end
+
+      prompt = single_object(document["prompt"], "prompt")
+      deployment = single_object(document["deployment"], "deployment")
+      model = single_object(document["model"], "model")
+      prompt_version = document["prompt_version"]
+
+      key = string_or_nil(prompt["key"])
+      raise InvalidUseCaseDocumentError, "schema9 prompt.key is required" unless key
+
+      provider = string_or_nil(model["provider"])
+      model_name = string_or_nil(model["model"])
+      raise InvalidUseCaseDocumentError, "schema9 model provider and model are required" unless provider && model_name
+
+      unless string_or_nil(deployment["provider"]) == provider && string_or_nil(deployment["model"]) == model_name
+        raise InvalidUseCaseDocumentError, "schema9 deployment provider/model must match model"
+      end
+
+      normalized_prompt = prompt.dup
+      normalized_prompt.delete("key")
+      normalized = {
+        "schema_version" => 9,
+        "project" => document["project"],
+        "environment" => document["environment"],
+        "prompts" => { key => normalized_prompt },
+        "deployments" => { key => deployment },
+        "prompt_versions" => {},
+        "models" => { "#{provider}:#{model_name}" => model }
+      }
+
+      prompt_version = single_object(prompt_version, "prompt_version")
+      unless string_or_nil(prompt_version["prompt"]) == key
+        raise InvalidUseCaseDocumentError, "schema9 prompt_version.prompt must match prompt.key"
+      end
+
+      number = prompt_version["number"]
+      unless number.is_a?(Integer) && number.positive?
+        raise InvalidUseCaseDocumentError, "schema9 prompt_version.number must be a positive integer"
+      end
+      unless deployment["prompt_version"] == number
+        raise InvalidUseCaseDocumentError, "schema9 deployment.prompt_version must match prompt_version.number"
+      end
+
+      normalized["prompt_versions"]["#{key}@#{number}"] = prompt_version
+
+      normalized
+    end
+
+    def single_object(value, field)
+      raise InvalidUseCaseDocumentError, "schema9 #{field} must be an object" unless value.is_a?(Hash)
+
+      value
     end
 
     def decode_use_cases(raw)

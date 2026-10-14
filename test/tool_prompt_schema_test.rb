@@ -174,6 +174,58 @@ class ToolPromptSchemaTest < Minitest::Test
     assert_equal({ "routing" => "direct" }, triage.provider_options)
   end
 
+  def test_schema9_single_prompt_response_normalizes_to_readable_prompt_document
+    document = PromptOn::UseCaseDocument.from_hash(schema9_single_prompt_document)
+    support = PromptOn::Resolver.resolve(document, "support_reply")
+
+    assert_equal 9, document.schema_version
+    assert_equal ["support_reply"], document.use_case_keys
+    assert_equal "anthropic/claude-sonnet-4", support.model
+    assert_equal "openrouter", support.provider
+    assert_equal "v2026.10.14-1", support.deployment_revision
+    assert_equal 1, support.prompt_version_number
+    assert_equal "Reply to Ada for pro.", support.render("question" => "Ada", "plan" => "pro").last["content"]
+  end
+
+  def test_schema9_single_prompt_response_preserves_decision_payload
+    body = schema9_single_prompt_document(
+      key: "decision_triage",
+      kind: "decision",
+      model: "typesafe/jev-1.13",
+      prompt_version: {
+        "prompt" => "decision_triage", "number" => 1, "kind" => "decision", "engine" => "liquid",
+        "decision" => { "questions" => { "eligible" => { "type" => "noul" } } }
+      },
+      deployment: {
+        "revision" => "v2026.10.14-1", "provider" => "openrouter", "model" => "typesafe/jev-1.13",
+        "prompt_version" => 1, "api" => "decisions", "request_path" => "/api/v1/systemone"
+      }
+    )
+    document = PromptOn::UseCaseDocument.from_hash(body)
+    evidence = PromptOn::Resolver.resolve(document, "decision_triage")
+    version = document.prompt_versions.fetch("decision_triage@1")
+
+    assert_equal "decision", evidence.kind
+    assert_equal({ "questions" => { "eligible" => { "type" => "noul" } } }, version.decision)
+    assert_equal "/api/v1/systemone", evidence.request_path
+  end
+
+  def test_schema9_rejects_mixed_or_inconsistent_single_prompt_shapes
+    [["mixed collections", schema9_single_prompt_document.merge("prompts" => {})],
+     ["prompt mismatch", schema9_single_prompt_document.tap { |doc| doc["prompt_version"]["prompt"] = "other" }],
+     ["model mismatch", schema9_single_prompt_document.tap { |doc| doc["deployment"]["model"] = "other" }],
+     ["missing version", schema9_single_prompt_document.merge("prompt_version" => nil)],
+     ["float deployment version", schema9_single_prompt_document.tap do |doc|
+       doc["deployment"]["prompt_version"] = 1.0
+     end],
+     ["float schema", schema9_single_prompt_document.merge("schema_version" => 9.0)],
+     ["missing prompt", schema9_single_prompt_document.except("prompt")]].each do |name, body|
+      assert_raises(PromptOn::InvalidUseCaseDocumentError, name) do
+        PromptOn::UseCaseDocument.from_hash(body)
+      end
+    end
+  end
+
   def test_schema8_prompt_version_pin_must_be_positive
     error = assert_raises(PromptOn::InvalidUseCaseDocumentError) do
       PromptOn::UseCaseDocument.from_hash(
@@ -244,5 +296,39 @@ class ToolPromptSchemaTest < Minitest::Test
       PromptOn::UseCaseDocument.from_hash(document)
     end
     assert_match(/must not include prompt_pins/, error.message)
+  end
+
+  private
+
+  def schema9_single_prompt_document(key: "support_reply", kind: "chat", model: "anthropic/claude-sonnet-4",
+                                     prompt_version: nil, deployment: nil)
+    prompt_version ||= {
+      "prompt" => key, "number" => 1, "kind" => kind, "engine" => "liquid",
+      "messages" => [{ "role" => "system", "content" => "Keep opaque 019916f4-12b0-7e6c-a1d3-8c9f2b4e6a57." },
+                     { "role" => "user", "content" => "Reply to {{ question }} for {{ plan }}." }]
+    }
+    deployment ||= {
+      "revision" => "v2026.10.14-1", "provider" => "openrouter", "model" => model,
+      "prompt_version" => prompt_version["number"], "params" => {}, "provider_options" => { "only" => ["Anthropic"] },
+      "api" => "chat_completions", "request_path" => "/api/v1/chat/completions"
+    }
+    {
+      "schema_version" => 9,
+      "project" => "heydiary-10242",
+      "environment" => "production",
+      "prompt" => {
+        "key" => key, "kind" => kind,
+        "input_schema" => [{ "name" => "plan", "type" => "string", "required" => false },
+                           { "name" => "question", "type" => "string", "required" => false }],
+        "default_params" => {},
+        "payload_policy" => { "mode" => "full", "sample_rate" => 1.0, "max_bytes" => 262_144 }
+      },
+      "deployment" => deployment,
+      "prompt_version" => prompt_version,
+      "model" => {
+        "provider" => "openrouter", "model" => model, "display_name" => "Claude Sonnet 4",
+        "metadata" => {}, "provider_options" => {}, "capabilities" => ["tools"], "status" => "active"
+      }
+    }
   end
 end

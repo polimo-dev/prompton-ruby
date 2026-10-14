@@ -390,6 +390,26 @@ class SnapshotCacheTest < Minitest::Test
     refute_match(/\b(id|model_id|prompt_pins|template_pins|prompt_template_id)\b/, JSON.generate(exported))
   end
 
+  def test_schema9_single_prompt_fetch_preserves_raw_cache_and_reloads_export
+    body = schema9_prompt_json("greeting")
+    @state["greeting"][:body] = body
+    @state["greeting"][:etag] = "\"schema9-greeting\""
+    disk_path = File.join(@dir, "cache.json")
+    client = build_client(disk_cache: disk_path)
+
+    assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model
+
+    assert_equal body, File.read(disk_path)
+    assert_equal 9, JSON.parse(File.read(disk_path))["schema_version"]
+
+    client.export_use_case_document(bundle_path)
+    assert_equal body, File.read(bundle_path)
+    offline = build_client(mode: :offline, api_key: nil, disk_cache: false, bundle: bundle_path)
+
+    assert_equal "bundle", offline.use_case("greeting").source
+    assert_equal "Say hello to Ada.", offline.use_case("greeting").messages("name" => "Ada").last["content"]
+  end
+
   private
 
   def bundle_path
@@ -450,6 +470,22 @@ class SnapshotCacheTest < Minitest::Test
           "status" => "active"
         }
       }
+    )
+  end
+
+  def schema9_prompt_json(key)
+    bulk = JSON.parse(schema8_prompt_json(key))
+    deployment = bulk.fetch("deployments").fetch(key)
+    version = bulk.fetch("prompt_versions").fetch("#{key}@#{deployment.fetch("prompt_version")}")
+    model = bulk.fetch("models").fetch("#{deployment.fetch("provider")}:#{deployment.fetch("model")}")
+    JSON.generate(
+      "schema_version" => 9,
+      "project" => bulk["project"],
+      "environment" => bulk["environment"],
+      "prompt" => bulk.fetch("prompts").fetch(key).merge("key" => key),
+      "deployment" => deployment,
+      "prompt_version" => version,
+      "model" => model
     )
   end
 

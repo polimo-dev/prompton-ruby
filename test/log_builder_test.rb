@@ -18,14 +18,15 @@ class LogBuilderTest < Minitest::Test
     assert_equal "greeting", record["prompt_key"]
     assert_equal "chat", record["kind"]
     assert_equal "openai/gpt-4o-mini", record["model"]
-    assert_equal "0198f2a1-0000-7000-8000-00000000e001", record["model_id"]
     assert_equal "openrouter", record["provider"]
     assert_equal "OpenAI", record["upstream_provider"]
-    assert_equal "0198f2a1-0000-7000-8000-00000000d001", record["deployment_id"]
     assert_equal "v2026.09.30-3", record["deployment_revision"]
     assert_equal "default", record["template"]
-    assert_equal "0198f2a1-0000-7000-8000-00000000a001", record["prompt_version_id"]
+    assert_equal 2, record["prompt_version_number"]
     assert_equal "remote", record["source"]
+    refute record.key?("deployment_id")
+    refute record.key?("prompt_version_id")
+    refute record.key?("model_id")
     assert_equal "stop", record["stop_kind"]
     assert_equal({ "temperature" => 0.2, "max_tokens" => 512 }, record["params"])
     assert_equal({ "name" => "prompton-ruby", "version" => PromptOn::VERSION }, record["sdk"])

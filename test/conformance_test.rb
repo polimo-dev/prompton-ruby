@@ -167,7 +167,10 @@ class ConformanceTest < Minitest::Test
       assert_optional_enum(record.dig("usage", "cost_source"), COST_SOURCES, "#{name}: cost_source")
 
       %w[deployment_id prompt_version_id model_id].each do |key|
-        assert_match UUID, record[key], "#{name}: #{key} must be a UUID" if record[key]
+        refute record.key?(key), "#{name}: retired #{key} must be omitted"
+      end
+      if record.key?("prompt_version_number")
+        assert_operator record["prompt_version_number"], :>, 0, "#{name}: prompt_version_number"
       end
 
       if record["error"]

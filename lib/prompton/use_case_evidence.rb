@@ -4,8 +4,8 @@ require_relative "template"
 
 module PromptOn
   # What to use for this call: the model, its params and provider options, and the pinned prompt
-  # template. The app calls the LLM itself with these values and records the use-case evidence
-  # (deployment_id, deployment_revision, prompt, prompt_version_id) in the monitoring log.
+  # template. The app calls the LLM itself with these values and records readable evidence
+  # (deployment_revision, prompt, prompt_version_number, provider, model) in the monitoring log.
   class UseCaseEvidence
     attr_reader :use_case, :kind, :prompt, :prompt_names, :deployment_id,
                 :deployment_revision, :prompt_version_id, :prompt_version_number, :engine,

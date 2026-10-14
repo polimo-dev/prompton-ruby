@@ -6,6 +6,7 @@ require "openssl"
 require "timeout"
 require "uri"
 require_relative "errors"
+require_relative "payload"
 
 module PromptOn
   # The PromptOn HTTP layer: three endpoints, no retry policy of its own.
@@ -95,7 +96,7 @@ module PromptOn
     def post_logs(records, environment:)
       request = Net::HTTP::Post.new(request_uri("/logs", environment: environment))
       request["Content-Type"] = "application/json"
-      request.body = JSON.generate({ "logs" => records })
+      request.body = JSON.generate({ "logs" => records.map { |record| Payload.strip_retired_resource_fields(record) } })
       perform(request)
     end
 

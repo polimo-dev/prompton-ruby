@@ -422,7 +422,9 @@ module PromptOn
 
       return nil if closed_transport_log?(prepared)
 
-      Payload.apply(prepared, policy_for(prepared, evidence), **payload_config)
+      Payload.strip_retired_resource_fields(
+        Payload.apply(prepared, policy_for(prepared, evidence), **payload_config)
+      )
     end
 
     def closed_transport_log?(record)
@@ -441,10 +443,9 @@ module PromptOn
 
     def merge_use_case(record, evidence)
       { "prompt_key" => evidence.use_case, "kind" => evidence.kind, "model" => evidence.model,
-        "model_id" => evidence.model_id, "provider" => evidence.provider,
-        "deployment_id" => evidence.deployment_id,
+        "provider" => evidence.provider,
         "deployment_revision" => evidence.deployment_revision, "template" => evidence.prompt,
-        "prompt_version_id" => evidence.prompt_version_id,
+        "prompt_version_number" => evidence.prompt_version_number,
         "source" => evidence.source }.each do |key, value|
         record[key] = value if record[key].nil? && !value.nil?
       end

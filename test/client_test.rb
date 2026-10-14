@@ -120,9 +120,25 @@ class ClientTest < Minitest::Test
     assert_equal "greeting", logged["prompt_key"]
     assert_equal "ko", logged["template"]
     assert_equal "v2026.09.30-3", logged["deployment_revision"]
-    assert_equal "0198f2a1-0000-7000-8000-00000000a002", logged["prompt_version_id"]
+    assert_equal 1, logged["prompt_version_number"]
     assert_equal "manual", logged["source"]
     assert_equal({ "temperature" => 0.2, "max_tokens" => 512 }, logged["params"])
+    refute logged.key?("deployment_id")
+    refute logged.key?("prompt_version_id")
+    refute logged.key?("model_id")
+  end
+
+  def test_retired_resource_uuid_fields_are_stripped_from_hand_built_records
+    client = build_client(mode: :test)
+    logged = client.log({ "prompt_key" => "greeting", "model" => "openai/gpt-4o-mini", "status" => "ok",
+                          "started_at" => Time.now.utc.iso8601(6),
+                          "deployment_id" => "0198f2a1-0000-7000-8000-00000000d001",
+                          "prompt_version_id" => "0198f2a1-0000-7000-8000-00000000a001",
+                          "model_id" => "0198f2a1-0000-7000-8000-00000000e001" })
+
+    refute logged.key?("deployment_id")
+    refute logged.key?("prompt_version_id")
+    refute logged.key?("model_id")
   end
 
   def test_symbol_keys_are_accepted_and_normalised
@@ -238,7 +254,8 @@ class ClientTest < Minitest::Test
 
     logged = client.logged.first
     assert_equal "ko", logged["template"]
-    assert_equal "0198f2a1-0000-7000-8000-00000000a002", logged["prompt_version_id"]
+    assert_equal 1, logged["prompt_version_number"]
+    refute logged.key?("prompt_version_id")
     assert_equal "Ada님에게 인사해줘.", logged.dig("input", "messages").last["content"]
   end
 

@@ -21,6 +21,7 @@ module PromptOn
     DEFAULT_MAX_BYTES = 262_144
     DEFAULTS = { mode: "full", sample_rate: 1.0, max_bytes: DEFAULT_MAX_BYTES }.freeze
     MIN_TOOL_ARGUMENT_BUDGET = 32
+    RETIRED_RESOURCE_FIELDS = %w[deployment_id prompt_version_id model_id].freeze
 
     module_function
 
@@ -31,6 +32,11 @@ module PromptOn
       result = cap_error_message(result)
       result = hash_end_user_ref(result, hash_end_user)
       run_redact(result, redact, logger)
+    end
+
+    # Drops retired public resource UUID references before a monitoring log crosses the SDK boundary.
+    def strip_retired_resource_fields(log)
+      log.reject { |key, _| RETIRED_RESOURCE_FIELDS.include?(key.to_s) }
     end
 
     # Normalises a use-case document payload_policy over the SDK defaults. sample_rate is clamped to 0..1.

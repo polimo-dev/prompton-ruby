@@ -74,24 +74,39 @@ class LogBufferTest < Minitest::Test
       attempts == 1 ? [429, { "Retry-After" => "0" }, { "error" => { "code" => "rate_limited" } }] : ok
     end
     buffer = build_buffer
-    2.times { |index| buffer.enqueue(record(index)) }
+    2.times do |index|
+      buffer.enqueue(record(index).merge("deployment_id" => "0198f2a1-0000-7000-8000-00000000d001",
+                                         "prompt_version_id" => "0198f2a1-0000-7000-8000-00000000a001",
+                                         "model_id" => "0198f2a1-0000-7000-8000-00000000e001"))
+    end
 
     buffer.flush
 
     assert_equal 2, @server.request_count
     assert_equal(sent_batches[0].map { |r| r["id"] }, sent_batches[1].map { |r| r["id"] })
+    sent_batches.flatten.each do |sent|
+      refute sent.key?("deployment_id")
+      refute sent.key?("prompt_version_id")
+      refute sent.key?("model_id")
+    end
     assert_equal 1, buffer.stats[:retries]
   end
 
   def test_a_429_honours_retry_after_before_trying_again
     @behaviour = ->(_request) { [429, { "Retry-After" => "30" }, { "error" => {} }] }
     buffer = build_buffer
-    buffer.enqueue(record(1))
+    buffer.enqueue(record(1).merge("deployment_id" => "0198f2a1-0000-7000-8000-00000000d001",
+                                   "prompt_version_id" => "0198f2a1-0000-7000-8000-00000000a001",
+                                   "model_id" => "0198f2a1-0000-7000-8000-00000000e001"))
 
     buffer.flush
     second = buffer.flush
 
     assert_equal 1, @server.request_count
+    sent = sent_batches.first.first
+    refute sent.key?("deployment_id")
+    refute sent.key?("prompt_version_id")
+    refute sent.key?("model_id")
     assert_equal 1, buffer.stats[:queued], "the batch stays queued, later records queue behind it"
     assert_operator buffer.stats[:paused_for], :>, 25
     assert_equal 1, second[:queued], "a flush that sends nothing says what it left behind"

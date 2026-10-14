@@ -2,6 +2,7 @@
 
 require "time"
 require_relative "params"
+require_relative "payload"
 require_relative "result"
 require_relative "stop_kind"
 require_relative "uuid_v7"
@@ -63,14 +64,12 @@ module PromptOn
         "prompt_key" => evidence&.use_case || meta[:prompt_key] || meta[:use_case],
         "kind" => evidence&.kind || meta[:kind],
         "model" => result[:model] || evidence&.model || meta[:model],
-        "model_id" => evidence&.model_id,
         "model_used" => result[:model_used],
         "provider" => evidence&.provider,
         "upstream_provider" => result[:upstream_provider],
-        "deployment_id" => evidence&.deployment_id,
         "deployment_revision" => evidence&.deployment_revision,
         "template" => evidence&.prompt,
-        "prompt_version_id" => evidence&.prompt_version_id,
+        "prompt_version_number" => evidence&.prompt_version_number,
         "source" => evidence&.source,
         "status" => status,
         "started_at" => iso8601(started_at),
@@ -96,7 +95,7 @@ module PromptOn
         "sdk" => { "name" => SDK_NAME, "version" => VERSION }
       }
 
-      record.compact
+      Payload.strip_retired_resource_fields(record.compact)
     end
 
     def build_input(meta)

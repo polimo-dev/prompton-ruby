@@ -326,6 +326,50 @@ class SnapshotCacheTest < Minitest::Test
     assert_equal "bundle", offline.use_case("greeting").source
   end
 
+  def test_legacy_full_cache_can_merge_schema8_prompt_and_export_reloads_it
+    File.write(bundle_path, prompt_json("greeting"))
+    @state["summarize"][:body] = schema8_prompt_json("summarize")
+    @state["summarize"][:etag] = "\"schema8-summarize\""
+    client = build_client(bundle: bundle_path)
+
+    assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model
+    assert_equal "openai/gpt-4o-mini", client.use_case("summarize").model
+    assert_equal "\"schema8-summarize\"", client.use_case("summarize").etag
+
+    client.export_use_case_document(bundle_path)
+    exported = JSON.parse(File.read(bundle_path))
+    offline = build_client(mode: :offline, api_key: nil, disk_cache: false, bundle: bundle_path)
+
+    assert_operator exported["schema_version"], :<, 8
+    assert exported.dig("use_cases", "summarize"), "legacy export should keep schema8 prompt under use_cases"
+    assert_equal "bundle", offline.use_case("summarize").source
+    assert_equal 1, offline.use_case("summarize").prompt_version_number
+    assert_equal [{ "role" => "user", "content" => "Say hello to Ada." }],
+                 offline.use_case("summarize").messages("name" => "Ada")
+  end
+
+  def test_two_schema8_prompt_fetches_merge_into_readable_export
+    @state["greeting"][:body] = schema8_prompt_json("greeting")
+    @state["greeting"][:etag] = "\"schema8-greeting\""
+    @state["summarize"][:body] = schema8_prompt_json("summarize")
+    @state["summarize"][:etag] = "\"schema8-summarize\""
+    client = build_client
+
+    assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model
+    assert_equal "openai/gpt-4o-mini", client.use_case("summarize").model
+
+    client.export_use_case_document(bundle_path)
+    exported = JSON.parse(File.read(bundle_path))
+    offline = build_client(mode: :offline, api_key: nil, disk_cache: false, bundle: bundle_path)
+
+    assert_equal 8, exported["schema_version"]
+    assert_equal %w[greeting summarize], exported.fetch("prompts").keys.sort
+    assert_equal %w[greeting@1 summarize@1], exported.fetch("prompt_versions").keys.sort
+    refute exported.key?("use_cases")
+    assert_equal "bundle", offline.use_case("greeting").source
+    assert_equal "bundle", offline.use_case("summarize").source
+  end
+
   def test_schema8_prompt_fetch_preserves_readable_cache_and_export_shape
     body = schema8_prompt_json("greeting")
     @state["greeting"][:body] = body
@@ -374,14 +418,12 @@ class SnapshotCacheTest < Minitest::Test
   end
 
   def schema8_prompt_json(key)
-    raise ArgumentError, key unless key == "greeting"
-
     JSON.generate(
       "schema_version" => 8,
       "project" => "sdkfixture",
       "environment" => "production",
       "prompts" => {
-        "greeting" => {
+        key => {
           "kind" => "chat",
           "input_schema" => [{ "name" => "name", "type" => "string", "required" => true }],
           "default_params" => { "max_tokens" => 256 },
@@ -389,15 +431,15 @@ class SnapshotCacheTest < Minitest::Test
         }
       },
       "deployments" => {
-        "greeting" => {
+        key => {
           "revision" => "v2026.10.14-1", "provider" => "openrouter",
           "model" => "openai/gpt-4o-mini", "prompt_version" => 1,
           "params" => { "temperature" => 0.2 }, "provider_options" => { "only" => ["OpenAI"] }
         }
       },
       "prompt_versions" => {
-        "greeting@1" => {
-          "prompt" => "greeting", "number" => 1, "kind" => "chat", "engine" => "liquid",
+        "#{key}@1" => {
+          "prompt" => key, "number" => 1, "kind" => "chat", "engine" => "liquid",
           "messages" => [{ "role" => "user", "content" => "Say hello to {{ name }}." }]
         }
       },

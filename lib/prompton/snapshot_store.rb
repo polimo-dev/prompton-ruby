@@ -331,17 +331,26 @@ module PromptOn
     def merge_documents(existing, incoming, key)
       merged = existing ? document_to_h(existing) : base_document(incoming)
       incoming_hash = document_to_h(incoming)
-      %w[use_cases prompts deployments].each do |collection|
-        next unless incoming_hash[collection].is_a?(Hash)
-
-        merged[collection] ||= {}
-        merged[collection][key] = incoming_hash[collection][key] if incoming_hash[collection].key?(key)
+      prompt_collection = prompt_collection_name(merged)
+      incoming_prompts = incoming_hash["use_cases"] || incoming_hash["prompts"]
+      if incoming_prompts.is_a?(Hash) && incoming_prompts.key?(key)
+        merged.delete(prompt_collection == "prompts" ? "use_cases" : "prompts")
+        merged[prompt_collection] ||= {}
+        merged[prompt_collection][key] = incoming_prompts[key]
+      end
+      if incoming_hash["deployments"].is_a?(Hash) && incoming_hash["deployments"].key?(key)
+        merged["deployments"] ||= {}
+        merged["deployments"][key] = incoming_hash["deployments"][key]
       end
       %w[prompt_versions models].each do |collection|
         merged[collection] ||= {}
         merged[collection].merge!(incoming_hash[collection] || {})
       end
       UseCaseDocument.from_hash(merged)
+    end
+
+    def prompt_collection_name(document)
+      document["schema_version"].to_i >= 8 ? "prompts" : "use_cases"
     end
 
     def base_document(data)

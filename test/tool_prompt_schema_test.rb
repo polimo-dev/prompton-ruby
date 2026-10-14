@@ -186,4 +186,63 @@ class ToolPromptSchemaTest < Minitest::Test
 
     assert_match(/prompt_version must be a positive integer/, error.message)
   end
+
+  def test_schema8_composite_keys_must_match_embedded_fields
+    valid = {
+      "schema_version" => 8,
+      "prompts" => { "chat" => { "kind" => "chat" } },
+      "deployments" => {
+        "chat" => { "revision" => "v2026.10.14-1", "provider" => "openrouter",
+                    "model" => "openai/gpt-4o-mini", "prompt_version" => 2 }
+      },
+      "prompt_versions" => {
+        "chat@2" => { "prompt" => "chat", "number" => 2, "kind" => "chat",
+                      "messages" => [{ "role" => "user", "content" => "ok" }] }
+      },
+      "models" => {
+        "openrouter:openai/gpt-4o-mini" => {
+          "provider" => "openrouter", "model" => "openai/gpt-4o-mini"
+        }
+      }
+    }
+
+    [["prompt mismatch", ["prompt_versions", "chat@2", "prompt"], "other"],
+     ["number mismatch", ["prompt_versions", "chat@2", "number"], 99],
+     ["provider mismatch", ["models", "openrouter:openai/gpt-4o-mini", "provider"], "other"],
+     ["model mismatch", ["models", "openrouter:openai/gpt-4o-mini", "model"], "other"]].each do |name, path, value|
+      document = Marshal.load(Marshal.dump(valid))
+      document.dig(*path[0...-1])[path.last] = value
+
+      error = assert_raises(PromptOn::InvalidUseCaseDocumentError, name) do
+        PromptOn::UseCaseDocument.from_hash(document)
+      end
+      assert_match(/schema8/, error.message)
+    end
+  end
+
+  def test_schema8_rejects_retired_reference_fields
+    document = {
+      "schema_version" => 8,
+      "prompts" => { "chat" => { "kind" => "chat" } },
+      "deployments" => {
+        "chat" => { "revision" => "v2026.10.14-1", "provider" => "openrouter",
+                    "model" => "openai/gpt-4o-mini", "prompt_version" => 1,
+                    "prompt_pins" => { "default" => "chat@1" } }
+      },
+      "prompt_versions" => {
+        "chat@1" => { "prompt" => "chat", "number" => 1, "kind" => "chat",
+                      "messages" => [{ "role" => "user", "content" => "ok" }] }
+      },
+      "models" => {
+        "openrouter:openai/gpt-4o-mini" => {
+          "provider" => "openrouter", "model" => "openai/gpt-4o-mini"
+        }
+      }
+    }
+
+    error = assert_raises(PromptOn::InvalidUseCaseDocumentError) do
+      PromptOn::UseCaseDocument.from_hash(document)
+    end
+    assert_match(/must not include prompt_pins/, error.message)
+  end
 end

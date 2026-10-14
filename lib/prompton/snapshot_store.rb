@@ -107,8 +107,9 @@ module PromptOn
       now = Time.now
       entry = nil
       @mutex.synchronize do
+        had_entry = !@entry.nil?
         merged = merge_documents(@entry&.data, data, key)
-        merged_body = JSON.generate(document_to_h(merged))
+        merged_body = had_entry ? JSON.generate(document_to_h(merged)) : body
         @prompt_meta[key] = { etag: etag, last_modified: last_modified, source: "remote",
                               fetched_at: now, stale_since: nil }
         @prompt_entries[key] =
@@ -350,6 +351,8 @@ module PromptOn
     end
 
     def document_to_h(data)
+      return schema8_document_to_h(data) if data.schema_version >= 8
+
       {
         "schema_version" => data.schema_version,
         "project" => data.project,
@@ -378,6 +381,37 @@ module PromptOn
         "models" => data.models.transform_values do |model|
           { "id" => model.id, "provider" => model.provider, "model_id" => model.model_id,
             "model" => model.model_id,
+            "display_name" => model.display_name, "metadata" => model.metadata,
+            "provider_options" => model.provider_options, "capabilities" => model.capabilities,
+            "pricing" => model.pricing, "context_length" => model.context_length,
+            "status" => model.status }.compact
+        end
+      }
+    end
+
+    def schema8_document_to_h(data)
+      {
+        "schema_version" => data.schema_version,
+        "project" => data.project,
+        "environment" => data.environment,
+        "prompts" => data.use_cases.transform_values do |use_case|
+          { "kind" => use_case.kind, "input_schema" => use_case.input_schema,
+            "default_params" => use_case.default_params,
+            "payload_policy" => payload_policy_to_h(use_case.payload_policy) }.compact
+        end,
+        "deployments" => data.deployments.transform_values do |deployment|
+          { "revision" => deployment.revision, "provider" => deployment.provider,
+            "model" => deployment.model, "prompt_version" => deployment.prompt_version,
+            "params" => deployment.params, "provider_options" => deployment.provider_options,
+            "api" => deployment.api, "request_path" => deployment.request_path }.compact
+        end,
+        "prompt_versions" => data.prompt_versions.transform_values do |version|
+          { "prompt" => version.prompt, "number" => version.number, "engine" => version.engine,
+            "messages" => version.messages, "text_template" => version.text_template,
+            "kind" => version.kind, "decision" => version.decision, "tools" => version.tools }.compact
+        end,
+        "models" => data.models.transform_values do |model|
+          { "provider" => model.provider, "model" => model.model_id,
             "display_name" => model.display_name, "metadata" => model.metadata,
             "provider_options" => model.provider_options, "capabilities" => model.capabilities,
             "pricing" => model.pricing, "context_length" => model.context_length,

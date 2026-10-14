@@ -13,7 +13,7 @@ costs you nothing but fresher config: your app keeps running on the last use-cas
 This SDK is thin by design — no runtime dependencies, `Net::HTTP` and the standard library only.
 
 ```
-use_case("greeting", prompt: "ko") ──▶ UseCase{model, params, provider_options, …}
+use_case("greeting") ───────────────▶ UseCase{model, params, provider_options, …}
 use_case.messages(name: "Ada")     ──▶ the messages you send to your provider
 use_case.track { … }               ──▶ the provider call, timed and logged in the background
 ```
@@ -36,7 +36,7 @@ require "prompton"
 
 PromptOn.configure(api_key: ENV.fetch("PTN_API_KEY"))            # ptn_<project>_… , a project key
 
-use_case = PromptOn.use_case("greeting", prompt: "ko")            # from the cached use-case document
+use_case = PromptOn.use_case("greeting")                          # from the cached use-case document
 managed_messages = use_case.messages(style: "warm")               # PromptOn-managed prompt messages
 messages = managed_messages +
            conversation_history +                                # your app's prior messages
@@ -182,7 +182,7 @@ A log must never fail because PromptOn did. Config is stale in the worst case, n
 ## Resolving and rendering
 
 ```ruby
-use_case = PromptOn.use_case("diary_generation", prompt: "ko")
+use_case = PromptOn.use_case("diary_generation")
 
 use_case.model               # "anthropic/claude-sonnet-4" — the provider model string
 use_case.model_id            # deprecated local cache evidence; nil for schema8 readable configs
@@ -190,8 +190,8 @@ use_case.provider            # "openrouter"
 use_case.params              # use_case.default_params <- deployment.params
 use_case.provider_options    # model.provider_options   <- deployment.provider_options
 use_case.kind                # "chat" | "decision" | "text" | "embedding"
-use_case.prompt              # "ko"
-use_case.prompt_names        # ["default", "ko"]
+use_case.prompt              # "default"
+use_case.prompt_names        # ["default"]
 use_case.deployment_id       # deprecated local cache evidence; nil for schema8 readable configs
 use_case.deployment_revision # the pin revision, e.g. "v2026.10.14-1"
 use_case.prompt_version_id   # deprecated local cache evidence; nil for schema8 readable configs
@@ -203,7 +203,7 @@ use_case.text_template       # the raw text template (nil for chat/embedding)
 use_case.messages(name: "Ada") # chat: the rendered message list
 use_case.text(name: "Ada")     # text: the rendered string
 use_case.detected_variables    # ["name"]
-PromptOn.prompt_names("diary_generation")   # ["default", "ko"]
+PromptOn.prompt_names("diary_generation")   # ["default"]
 ```
 
 Both merges are **shallow** and the right side wins; an override of `nil` is kept as `nil`, not

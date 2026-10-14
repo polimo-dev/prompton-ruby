@@ -91,11 +91,14 @@ class ResolverTest < Minitest::Test
     legacy = snapshot_document.except("schema_version").merge("version" => 4)
     assert_raises(PromptOn::InvalidUseCaseDocumentError) { PromptOn::UseCaseDocument.from_hash(legacy) }
 
-    [4, 5, 6, 7, 8].each do |version|
+    [4, 5, 6, 7].each do |version|
       data = PromptOn::UseCaseDocument.from_hash(snapshot_document.merge("schema_version" => version))
       assert_equal version, data.schema_version
       assert_equal "openai/gpt-4o-mini", PromptOn::Resolver.resolve(data, "greeting").model
     end
+    data = PromptOn::UseCaseDocument.from_hash(schema8_snapshot_document)
+    assert_equal 8, data.schema_version
+    assert_equal "openai/gpt-4o-mini", PromptOn::Resolver.resolve(data, "greeting").model
   end
 
   def test_deployment_revision_must_be_a_string
@@ -111,5 +114,29 @@ class ResolverTest < Minitest::Test
   def test_prompt_names_lists_what_resolve_accepts
     assert_equal %w[default ko], PromptOn::Resolver.prompt_names(@snapshot, "greeting")
     assert_empty PromptOn::Resolver.prompt_names(@snapshot, "draft")
+  end
+
+  def schema8_snapshot_document
+    {
+      "schema_version" => 8,
+      "project" => "sdkfixture",
+      "environment" => "production",
+      "prompts" => {
+        "greeting" => { "kind" => "chat", "default_params" => {} }
+      },
+      "deployments" => {
+        "greeting" => { "revision" => "v2026.10.14-1", "provider" => "openrouter",
+                        "model" => "openai/gpt-4o-mini", "prompt_version" => 1 }
+      },
+      "prompt_versions" => {
+        "greeting@1" => { "prompt" => "greeting", "number" => 1, "kind" => "chat",
+                          "messages" => [{ "role" => "user", "content" => "hi" }] }
+      },
+      "models" => {
+        "openrouter:openai/gpt-4o-mini" => {
+          "provider" => "openrouter", "model" => "openai/gpt-4o-mini"
+        }
+      }
+    }
   end
 end

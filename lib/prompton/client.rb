@@ -371,7 +371,9 @@ module PromptOn
     end
 
     def base_stub_document
-      { "schema_version" => UseCaseDocument::SCHEMA_VERSION, "project" => @config.project,
+      # Test stubs keep the legacy multi-prompt pin shape because the public test helper lets one
+      # use case accumulate named prompts. Runtime fetch/cache/export uses schema8.
+      { "schema_version" => 7, "project" => @config.project,
         "environment" => @config.environment, "use_cases" => {}, "deployments" => {},
         "prompt_versions" => {}, "models" => {} }
     end

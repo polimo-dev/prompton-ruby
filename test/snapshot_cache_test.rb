@@ -326,6 +326,26 @@ class SnapshotCacheTest < Minitest::Test
     assert_equal "bundle", offline.use_case("greeting").source
   end
 
+  def test_schema8_prompt_fetch_preserves_readable_cache_and_export_shape
+    body = schema8_prompt_json("greeting")
+    @state["greeting"][:body] = body
+    @state["greeting"][:etag] = "\"schema8-greeting\""
+    disk_path = File.join(@dir, "cache.json")
+    client = build_client(disk_cache: disk_path)
+
+    assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model
+
+    assert_equal body, File.read(disk_path)
+    client.export_use_case_document(bundle_path)
+    exported = JSON.parse(File.read(bundle_path))
+    offline = build_client(mode: :offline, api_key: nil, disk_cache: false, bundle: bundle_path)
+
+    assert_equal "bundle", offline.use_case("greeting").source
+    assert_equal 8, exported["schema_version"]
+    assert exported.key?("prompts")
+    refute_match(/\b(id|model_id|prompt_pins|template_pins|prompt_template_id)\b/, JSON.generate(exported))
+  end
+
   private
 
   def bundle_path
@@ -351,6 +371,44 @@ class SnapshotCacheTest < Minitest::Test
     document.fetch("models").fetch(model_id)["model_id"] = model
     keep_prompt!(document, key)
     JSON.generate(document)
+  end
+
+  def schema8_prompt_json(key)
+    raise ArgumentError, key unless key == "greeting"
+
+    JSON.generate(
+      "schema_version" => 8,
+      "project" => "sdkfixture",
+      "environment" => "production",
+      "prompts" => {
+        "greeting" => {
+          "kind" => "chat",
+          "input_schema" => [{ "name" => "name", "type" => "string", "required" => true }],
+          "default_params" => { "max_tokens" => 256 },
+          "payload_policy" => { "mode" => "full", "sample_rate" => 1.0, "max_bytes" => 262_144 }
+        }
+      },
+      "deployments" => {
+        "greeting" => {
+          "revision" => "v2026.10.14-1", "provider" => "openrouter",
+          "model" => "openai/gpt-4o-mini", "prompt_version" => 1,
+          "params" => { "temperature" => 0.2 }, "provider_options" => { "only" => ["OpenAI"] }
+        }
+      },
+      "prompt_versions" => {
+        "greeting@1" => {
+          "prompt" => "greeting", "number" => 1, "kind" => "chat", "engine" => "liquid",
+          "messages" => [{ "role" => "user", "content" => "Say hello to {{ name }}." }]
+        }
+      },
+      "models" => {
+        "openrouter:openai/gpt-4o-mini" => {
+          "provider" => "openrouter", "model" => "openai/gpt-4o-mini",
+          "provider_options" => { "only" => ["OpenAI"] }, "capabilities" => ["tools"],
+          "status" => "active"
+        }
+      }
+    )
   end
 
   def keep_prompt!(document, key)

@@ -90,6 +90,7 @@ module PromptOn
       @models = decode_by_key(document["models"]) { |key, raw| decode_model(key, raw) }
       @deployments = decode_deployments(document["deployments"])
       @use_cases = decode_use_cases(document["use_cases"] || document["prompts"])
+      validate_v8_references! if schema8?
       freeze
     end
 
@@ -127,6 +128,7 @@ module PromptOn
           @warnings << Warning.new("invalid_use_case", key)
           next
         end
+        reject_v8_fields!(value, %w[id], "prompt #{key}") if schema8?
 
         acc[key] = UseCase.new(
           id: string_or_nil(value["id"]), key: key,
@@ -179,6 +181,7 @@ module PromptOn
           @warnings << Warning.new("invalid_deployment", key)
           next
         end
+        reject_v8_fields!(value, %w[id model_id prompt_pins template_pins], "deployment #{key}") if schema8?
 
         acc[key] = Deployment.new(
           id: string_or_nil(value["id"]),
@@ -196,6 +199,14 @@ module PromptOn
     end
 
     def deployment_model_key(value)
+      if schema8?
+        provider = string_or_nil(value["provider"])
+        model = string_or_nil(value["model"])
+        return "#{provider}:#{model}" if provider && model
+
+        raise InvalidUseCaseDocumentError, "schema8 deployment provider and model are required"
+      end
+
       legacy = string_or_nil(value["model_id"])
       return legacy if legacy
 
@@ -210,10 +221,11 @@ module PromptOn
       raw = value["prompt_version"]
       return nil if raw.nil?
 
-      number = integer_or(raw, nil)
-      raise InvalidUseCaseDocumentError, "deployment prompt_version must be a positive integer" unless number&.positive?
+      unless raw.is_a?(Integer) && raw.positive?
+        raise InvalidUseCaseDocumentError, "deployment prompt_version must be a positive integer"
+      end
 
-      number
+      raw
     end
 
     def decode_prompt_pins(raw, key, prompt_version = nil)
@@ -257,7 +269,10 @@ module PromptOn
       end
     end
 
-    def decode_prompt_version(_key, raw)
+    def decode_prompt_version(key, raw)
+      reject_v8_fields!(raw, %w[id prompt_id prompt_template_id], "prompt_version #{key}") if schema8?
+      validate_v8_prompt_version_key!(key, raw) if schema8?
+
       PromptVersion.new(
         id: string_or_nil(raw["id"]),
         prompt_id: string_or_nil(raw["prompt_id"]) || string_or_nil(raw["prompt_template_id"]),
@@ -298,7 +313,10 @@ module PromptOn
       tools.freeze
     end
 
-    def decode_model(_key, raw)
+    def decode_model(key, raw)
+      reject_v8_fields!(raw, %w[id model_id], "model #{key}") if schema8?
+      validate_v8_model_key!(key, raw) if schema8?
+
       Model.new(
         id: string_or_nil(raw["id"]), provider: string_or_nil(raw["provider"]),
         model_id: string_or_nil(raw["model_id"]) || string_or_nil(raw["model"]),
@@ -338,6 +356,66 @@ module PromptOn
       when Float then value.to_i
       when String then value.match?(/\A-?\d+\z/) ? value.to_i : default
       else default
+      end
+    end
+
+    def schema8?
+      @schema_version >= 8
+    end
+
+    def reject_v8_fields!(raw, fields, scope)
+      fields.each do |field|
+        next unless raw.key?(field)
+
+        raise InvalidUseCaseDocumentError, "schema8 #{scope} must not include #{field}"
+      end
+    end
+
+    def validate_v8_prompt_version_key!(key, raw)
+      prompt, number = split_prompt_version_key(key)
+      raw_prompt = string_or_nil(raw["prompt"])
+      raw_number = raw["number"]
+      return if raw_prompt == prompt && raw_number.is_a?(Integer) && raw_number.positive? && raw_number == number
+
+      raise InvalidUseCaseDocumentError,
+            "schema8 prompt_versions key #{key.inspect} must match prompt and positive number fields"
+    end
+
+    def split_prompt_version_key(key)
+      prompt, number = key.to_s.split("@", 2)
+      unless prompt && !prompt.empty? && number&.match?(/\A[1-9]\d*\z/)
+        raise InvalidUseCaseDocumentError, "schema8 prompt_versions key must look like prompt@number"
+      end
+
+      [prompt, number.to_i]
+    end
+
+    def validate_v8_model_key!(key, raw)
+      provider, model = key.to_s.split(":", 2)
+      unless provider && model && !provider.empty? && !model.empty? &&
+             string_or_nil(raw["provider"]) == provider && string_or_nil(raw["model"]) == model
+        raise InvalidUseCaseDocumentError,
+              "schema8 models key #{key.inspect} must match provider and model fields"
+      end
+    end
+
+    def validate_v8_references!
+      @deployments.each do |key, deployment|
+        unless @models[deployment.model_id]
+          raise InvalidUseCaseDocumentError, "schema8 deployment #{key} references unknown model"
+        end
+
+        use_case = @use_cases[key]
+        next if use_case&.kind == "embedding"
+
+        unless deployment.prompt_version&.positive?
+          raise InvalidUseCaseDocumentError, "schema8 deployment #{key} prompt_version must be a positive integer"
+        end
+
+        version_key = "#{key}@#{deployment.prompt_version}"
+        next if @prompt_versions[version_key]
+
+        raise InvalidUseCaseDocumentError, "schema8 deployment #{key} references unknown prompt version #{version_key}"
       end
     end
   end

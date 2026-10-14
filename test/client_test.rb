@@ -34,13 +34,11 @@ class ClientTest < Minitest::Test
     client.stub("greeting", model: "openai/gpt-4o-mini",
                             messages: [{ "role" => "user", "content" => "Hi {{ name }}" }],
                             params: { "temperature" => 0.3 })
-    client.stub("greeting", model: "openai/gpt-4o-mini", prompt: "ko",
-                            messages: [{ "role" => "user", "content" => "{{ name }}님" }])
     client.stub("summarize", model: "openai/gpt-4o-mini", kind: "text", text: "Sum {{ n }}")
 
-    assert_equal %w[default ko], client.prompt_names("greeting")
-    assert_equal [{ "role" => "user", "content" => "Ada님" }],
-                 client.use_case("greeting", prompt: "ko").messages(name: "Ada")
+    assert_equal ["default"], client.prompt_names("greeting")
+    assert_equal [{ "role" => "user", "content" => "Hi Ada" }],
+                 client.use_case("greeting").messages(name: "Ada")
     assert_equal({ "temperature" => 0.3 }, client.use_case("greeting").params)
     assert_equal "Sum 2", client.use_case("summarize").text(n: 2)
   end
@@ -112,15 +110,15 @@ class ClientTest < Minitest::Test
   def test_log_takes_the_use_case_evidence_from_a_use_case
     client = build_client(mode: :test)
     client.put_use_case_document(snapshot_document)
-    resolution = client.use_case("greeting", prompt: "ko")
+    resolution = client.use_case("greeting")
 
     logged = client.log({ "status" => "ok", "started_at" => Time.now.utc.iso8601(6) },
                         use_case_evidence: resolution)
 
     assert_equal "greeting", logged["prompt_key"]
-    assert_equal "ko", logged["template"]
+    assert_equal "default", logged["template"]
     assert_equal "v2026.09.30-3", logged["deployment_revision"]
-    assert_equal 1, logged["prompt_version_number"]
+    assert_equal 2, logged["prompt_version_number"]
     assert_equal "manual", logged["source"]
     assert_equal({ "temperature" => 0.2, "max_tokens" => 512 }, logged["params"])
     refute logged.key?("deployment_id")
@@ -151,7 +149,7 @@ class ClientTest < Minitest::Test
 
   def test_the_payload_policy_from_the_snapshot_is_applied_before_the_record_is_queued
     document = snapshot_document
-    document["use_cases"]["greeting"]["payload_policy"] =
+    document["prompts"]["greeting"]["payload_policy"] =
       { "mode" => "hash", "sample_rate" => 1.0, "max_bytes" => 262_144 }
     client = build_client(mode: :test)
     client.put_use_case_document(document)
@@ -249,14 +247,14 @@ class ClientTest < Minitest::Test
     client.put_use_case_document(snapshot_document)
     use_case = client.use_case("greeting")
 
-    messages = use_case.messages({ name: "Ada" }, prompt: "ko")
+    messages = use_case.messages({ name: "Ada" })
     use_case.track(variables: { name: "Ada" }, input_messages: messages) { { content: "안녕" } }
 
     logged = client.logged.first
-    assert_equal "ko", logged["template"]
-    assert_equal 1, logged["prompt_version_number"]
+    assert_equal "default", logged["template"]
+    assert_equal 2, logged["prompt_version_number"]
     refute logged.key?("prompt_version_id")
-    assert_equal "Ada님에게 인사해줘.", logged.dig("input", "messages").last["content"]
+    assert_equal "Say hello to Ada.", logged.dig("input", "messages").last["content"]
   end
 
   def test_a_failure_is_logged_with_its_kind_and_status_without_raising
@@ -313,10 +311,11 @@ class ClientTest < Minitest::Test
 
   def test_a_log_that_cannot_be_built_never_breaks_the_provider_call
     client = build_client(mode: :test)
-    document = snapshot_document
-    document["models"] = {}
-    client.put_use_case_document(document)
+    client.put_use_case_document(snapshot_document)
     resolution = client.use_case("greeting")
+    def client.log(*)
+      raise "log failed"
+    end
 
     assert_equal("fine", resolution.track { "fine" })
     assert_empty client.logged

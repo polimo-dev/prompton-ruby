@@ -73,10 +73,10 @@ class ConformanceTest < Minitest::Test
 
   # --- use_case.json --------------------------------------------------------
 
-  def test_every_conformance_document_decodes_as_schema_v4
+  def test_every_conformance_document_decodes_as_schema_v1
     conformance("prompt.json")["documents"].each do |reference, raw|
       data = PromptOn::UseCaseDocument.from_hash(raw)
-      assert_includes [4, 5, 6, 8, PromptOn::UseCaseDocument::SCHEMA_VERSION], data.schema_version, reference
+      assert_equal PromptOn::UseCaseDocument::SCHEMA_VERSION, data.schema_version, reference
     end
   end
 
@@ -241,8 +241,11 @@ class ConformanceTest < Minitest::Test
       "model" => resolution.model, "provider" => resolution.provider,
       "params" => resolution.params,
       "provider_options" => resolution.provider_options,
-      "prompt_version" => resolution.prompt_version_id &&
-                          { "id" => resolution.prompt_version_id, "number" => resolution.prompt_version_number },
+      "prompt_version" => resolution.prompt_version_number &&
+                          {
+                            "id" => resolution.prompt_version_id,
+                            "number" => resolution.prompt_version_number
+                          }.compact,
       "source" => resolution.source,
       "warnings" => resolution.warnings.map(&:to_s)
     }

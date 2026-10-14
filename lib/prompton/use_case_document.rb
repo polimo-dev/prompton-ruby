@@ -12,15 +12,14 @@ module PromptOn
     end
   end
 
-  # The use-case document declares a schema version this SDK does not read. Keep polling for a good one;
-  # never fall back to a hard-coded prompt.
+  # The use-case document declares a schema version this SDK does not read.
   class UnsupportedSchemaVersionError < InvalidUseCaseDocumentError
     attr_reader :schema_version
 
     def initialize(schema_version)
       @schema_version = schema_version
       super("use-case document schema version #{schema_version} is not supported " \
-            "(this SDK reads versions 4-#{UseCaseDocument::SCHEMA_VERSION} and schema9 single prompt responses)")
+            "(this SDK reads schema version #{UseCaseDocument::SCHEMA_VERSION})")
     end
 
     def code
@@ -35,19 +34,18 @@ module PromptOn
     end
   end
 
-  # The decoded `GET /use-cases`/`GET /prompts` document (schema v4-v8), plus
-  # schema9 single-prompt responses normalized at this boundary.
+  # The decoded schema1 prompt detail or aggregate prompt document.
   #
   # A deployment revision is a pin, not a router: one revision is one model plus one pinned
-  # prompt version per prompt name. v1 and v2 documents are refused.
+  # default prompt version. Only schema1 documents are accepted.
   class UseCaseDocument
-    SCHEMA_VERSION = 9
+    SCHEMA_VERSION = 1
     KINDS = %w[chat decision text embedding].freeze
     ENGINES = %w[liquid raw].freeze
     PAYLOAD_MODES = %w[full hash none].freeze
 
     # One use case: a single LLM call site, with the deployment pinned for this environment.
-    UseCase = Struct.new(:id, :key, :kind, :input_schema, :default_params, :payload_policy,
+    UseCase = Struct.new(:id, :key, :kind, :variables, :default_params, :payload_policy,
                          :deployment, keyword_init: true)
     # One pin: the model, its params and one prompt version per prompt name.
     Deployment = Struct.new(:id, :use_case_key, :revision, :model_id, :provider, :model,
@@ -84,15 +82,15 @@ module PromptOn
 
     def initialize(document)
       @warnings = []
-      document = normalize_single_prompt_document(document)
+      document = normalize_schema1_document(document)
       @schema_version = check_schema_version(document)
       @project = string_or_nil(document["project"])
       @environment = string_or_nil(document["environment"])
       @prompt_versions = decode_by_key(document["prompt_versions"]) { |key, raw| decode_prompt_version(key, raw) }
       @models = decode_by_key(document["models"]) { |key, raw| decode_model(key, raw) }
       @deployments = decode_deployments(document["deployments"])
-      @use_cases = decode_use_cases(document["use_cases"] || document["prompts"])
-      validate_v8_references! if schema8?
+      @use_cases = decode_use_cases(document["prompts"])
+      validate_schema1_references!
       freeze
     end
 
@@ -117,16 +115,24 @@ module PromptOn
       version = document["schema_version"]
       raise InvalidUseCaseDocumentError, "schema_version is required" if version.nil?
       raise InvalidUseCaseDocumentError, "schema_version must be an integer" unless version.is_a?(Integer)
-      return version if (4..SCHEMA_VERSION).include?(version)
+      return version if version == SCHEMA_VERSION
 
       raise UnsupportedSchemaVersionError, version
     end
 
-    def normalize_single_prompt_document(document)
-      return document unless document["schema_version"].is_a?(Integer) && document["schema_version"] == 9
+    def normalize_schema1_document(document)
+      return document unless document["schema_version"].is_a?(Integer) && document["schema_version"] == 1
+
+      if document["prompts"].is_a?(Array)
+        raise InvalidUseCaseDocumentError, "schema1 prompt index is not a loadable configuration"
+      end
+
+      has_single_detail = document.key?("prompt") || document.key?("deployment") ||
+                          document.key?("prompt_version") || document.key?("model")
+      return document unless has_single_detail
 
       if %w[use_cases prompts deployments prompt_versions models].any? { |field| document.key?(field) }
-        raise InvalidUseCaseDocumentError, "schema9 single prompt document must not include bulk collections"
+        raise InvalidUseCaseDocumentError, "schema1 prompt detail must not include aggregate collections"
       end
 
       prompt = single_object(document["prompt"], "prompt")
@@ -135,20 +141,20 @@ module PromptOn
       prompt_version = document["prompt_version"]
 
       key = string_or_nil(prompt["key"])
-      raise InvalidUseCaseDocumentError, "schema9 prompt.key is required" unless key
+      raise InvalidUseCaseDocumentError, "schema1 prompt.key is required" unless key
 
       provider = string_or_nil(model["provider"])
       model_name = string_or_nil(model["model"])
-      raise InvalidUseCaseDocumentError, "schema9 model provider and model are required" unless provider && model_name
+      raise InvalidUseCaseDocumentError, "schema1 model provider and model are required" unless provider && model_name
 
       unless string_or_nil(deployment["provider"]) == provider && string_or_nil(deployment["model"]) == model_name
-        raise InvalidUseCaseDocumentError, "schema9 deployment provider/model must match model"
+        raise InvalidUseCaseDocumentError, "schema1 deployment provider/model must match model"
       end
 
       normalized_prompt = prompt.dup
       normalized_prompt.delete("key")
       normalized = {
-        "schema_version" => 9,
+        "schema_version" => 1,
         "project" => document["project"],
         "environment" => document["environment"],
         "prompts" => { key => normalized_prompt },
@@ -159,15 +165,15 @@ module PromptOn
 
       prompt_version = single_object(prompt_version, "prompt_version")
       unless string_or_nil(prompt_version["prompt"]) == key
-        raise InvalidUseCaseDocumentError, "schema9 prompt_version.prompt must match prompt.key"
+        raise InvalidUseCaseDocumentError, "schema1 prompt_version.prompt must match prompt.key"
       end
 
       number = prompt_version["number"]
       unless number.is_a?(Integer) && number.positive?
-        raise InvalidUseCaseDocumentError, "schema9 prompt_version.number must be a positive integer"
+        raise InvalidUseCaseDocumentError, "schema1 prompt_version.number must be a positive integer"
       end
       unless deployment["prompt_version"] == number
-        raise InvalidUseCaseDocumentError, "schema9 deployment.prompt_version must match prompt_version.number"
+        raise InvalidUseCaseDocumentError, "schema1 deployment.prompt_version must match prompt_version.number"
       end
 
       normalized["prompt_versions"]["#{key}@#{number}"] = prompt_version
@@ -176,25 +182,28 @@ module PromptOn
     end
 
     def single_object(value, field)
-      raise InvalidUseCaseDocumentError, "schema9 #{field} must be an object" unless value.is_a?(Hash)
+      raise InvalidUseCaseDocumentError, "schema1 #{field} must be an object" unless value.is_a?(Hash)
 
       value
     end
 
     def decode_use_cases(raw)
-      raise InvalidUseCaseDocumentError, "use_cases/prompts is required" unless raw.is_a?(Hash)
+      raise InvalidUseCaseDocumentError, "prompts is required" unless raw.is_a?(Hash)
 
       raw.each_with_object({}) do |(key, value), acc|
         unless value.is_a?(Hash)
           @warnings << Warning.new("invalid_use_case", key)
           next
         end
-        reject_v8_fields!(value, %w[id], "prompt #{key}") if schema8?
+        reject_schema1_fields!(value, %w[id], "prompt #{key}") if schema1?
+        if value.key?("input_schema")
+          raise InvalidUseCaseDocumentError, "prompt #{key} must use variables, not input_schema"
+        end
 
         acc[key] = UseCase.new(
           id: string_or_nil(value["id"]), key: key,
           kind: enum(value["kind"], KINDS, "chat", "unknown_kind"),
-          input_schema: decode_input_schema(value["input_schema"]),
+          variables: decode_variables(value["variables"]),
           default_params: Params.stringify_keys(value["default_params"]),
           payload_policy: decode_payload_policy(value["payload_policy"]),
           deployment: @deployments[key]
@@ -202,7 +211,7 @@ module PromptOn
       end
     end
 
-    def decode_input_schema(raw)
+    def decode_variables(raw)
       return [] unless raw.is_a?(Array)
 
       raw.filter_map do |variable|
@@ -230,9 +239,9 @@ module PromptOn
     end
 
     def decode_deployments(raw)
-      return {} if raw.nil?
-
       unless raw.is_a?(Hash)
+        raise InvalidUseCaseDocumentError, "schema1 deployments must be an object" if schema1?
+
         @warnings << Warning.new("invalid_deployments", raw.class)
         return {}
       end
@@ -242,7 +251,7 @@ module PromptOn
           @warnings << Warning.new("invalid_deployment", key)
           next
         end
-        reject_v8_fields!(value, %w[id model_id prompt_pins template_pins], "deployment #{key}") if schema8?
+        reject_schema1_fields!(value, %w[id model_id prompt_pins template_pins], "deployment #{key}")
 
         acc[key] = Deployment.new(
           id: string_or_nil(value["id"]),
@@ -252,30 +261,18 @@ module PromptOn
           prompt_version: prompt_version_number(value),
           params: Params.stringify_keys(value["params"]),
           provider_options: Params.stringify_keys(value["provider_options"]),
-          prompt_pins: decode_prompt_pins(value["prompt_pins"] || value["template_pins"], key,
-                                          value["prompt_version"]),
+          prompt_pins: decode_prompt_pins(key, value["prompt_version"]),
           api: string_or_nil(value["api"]), request_path: string_or_nil(value["request_path"])
         ).freeze
       end
     end
 
     def deployment_model_key(value)
-      if schema8?
-        provider = string_or_nil(value["provider"])
-        model = string_or_nil(value["model"])
-        return "#{provider}:#{model}" if provider && model
-
-        raise InvalidUseCaseDocumentError, "schema8 deployment provider and model are required"
-      end
-
-      legacy = string_or_nil(value["model_id"])
-      return legacy if legacy
-
       provider = string_or_nil(value["provider"])
       model = string_or_nil(value["model"])
-      return nil unless provider && model
+      return "#{provider}:#{model}" if provider && model
 
-      "#{provider}:#{model}"
+      raise InvalidUseCaseDocumentError, "schema1 deployment provider and model are required"
     end
 
     def prompt_version_number(value)
@@ -289,41 +286,24 @@ module PromptOn
       raw
     end
 
-    def decode_prompt_pins(raw, key, prompt_version = nil)
-      return { DEFAULT_PROMPT => "#{key}@#{prompt_version}" } if raw.nil? && prompt_version
+    def decode_prompt_pins(key, prompt_version = nil)
+      return { DEFAULT_PROMPT => "#{key}@#{prompt_version}" } if prompt_version
 
-      return {} if raw.nil?
-
-      unless raw.is_a?(Hash)
-        @warnings << Warning.new("invalid_prompt_pins", key)
-        return {}
-      end
-
-      raw.each_with_object({}) do |(name, version_id), acc|
-        if version_id.is_a?(String)
-          acc[name.to_s] = version_id
-        else
-          @warnings << Warning.new("invalid_prompt_pin", "#{key}.#{name}")
-        end
-      end
+      {}
     end
 
     DEFAULT_PROMPT = "default"
     private_constant :DEFAULT_PROMPT
 
     def decode_by_key(raw)
-      return {} if raw.nil?
+      unless raw.is_a?(Hash)
+        raise InvalidUseCaseDocumentError, "schema1 collection must be an object" if schema1?
 
-      entries =
-        case raw
-        when Hash then raw.map { |id, value| [id, value] if value.is_a?(Hash) }
-        when Array then raw.grep(Hash).map { |value| [value["id"], value] }
-        else
-          @warnings << Warning.new("invalid_collection", raw.class)
-          []
-        end
+        @warnings << Warning.new("invalid_collection", raw.class)
+        return {}
+      end
 
-      entries.compact.each_with_object({}) do |(key, value), acc|
+      raw.map { |id, value| [id, value] if value.is_a?(Hash) }.compact.each_with_object({}) do |(key, value), acc|
         entry = yield(key.to_s, value)
         lookup_key = key || entry.id
         acc[lookup_key.to_s] = entry.freeze if lookup_key
@@ -331,12 +311,12 @@ module PromptOn
     end
 
     def decode_prompt_version(key, raw)
-      reject_v8_fields!(raw, %w[id prompt_id prompt_template_id], "prompt_version #{key}") if schema8?
-      validate_v8_prompt_version_key!(key, raw) if schema8?
+      reject_schema1_fields!(raw, %w[id prompt_id prompt_template_id], "prompt_version #{key}") if schema1?
+      validate_schema1_prompt_version_key!(key, raw) if schema1?
 
       PromptVersion.new(
         id: string_or_nil(raw["id"]),
-        prompt_id: string_or_nil(raw["prompt_id"]) || string_or_nil(raw["prompt_template_id"]),
+        prompt_id: nil,
         prompt: string_or_nil(raw["prompt"]),
         number: integer_or(raw["number"], nil),
         engine: enum(raw["engine"], ENGINES, "liquid", "unknown_engine"),
@@ -375,12 +355,12 @@ module PromptOn
     end
 
     def decode_model(key, raw)
-      reject_v8_fields!(raw, %w[id model_id], "model #{key}") if schema8?
-      validate_v8_model_key!(key, raw) if schema8?
+      reject_schema1_fields!(raw, %w[id model_id], "model #{key}") if schema1?
+      validate_schema1_model_key!(key, raw) if schema1?
 
       Model.new(
         id: string_or_nil(raw["id"]), provider: string_or_nil(raw["provider"]),
-        model_id: string_or_nil(raw["model_id"]) || string_or_nil(raw["model"]),
+        model_id: string_or_nil(raw["model"]),
         display_name: string_or_nil(raw["display_name"]),
         metadata: Params.stringify_keys(raw["metadata"]),
         provider_options: Params.stringify_keys(raw["provider_options"]),
@@ -420,63 +400,77 @@ module PromptOn
       end
     end
 
-    def schema8?
-      @schema_version >= 8
+    def schema1?
+      @schema_version == 1
     end
 
-    def reject_v8_fields!(raw, fields, scope)
+    def reject_schema1_fields!(raw, fields, scope)
       fields.each do |field|
         next unless raw.key?(field)
 
-        raise InvalidUseCaseDocumentError, "schema8 #{scope} must not include #{field}"
+        raise InvalidUseCaseDocumentError, "schema1 #{scope} must not include #{field}"
       end
     end
 
-    def validate_v8_prompt_version_key!(key, raw)
+    def validate_schema1_prompt_version_key!(key, raw)
       prompt, number = split_prompt_version_key(key)
       raw_prompt = string_or_nil(raw["prompt"])
       raw_number = raw["number"]
       return if raw_prompt == prompt && raw_number.is_a?(Integer) && raw_number.positive? && raw_number == number
 
       raise InvalidUseCaseDocumentError,
-            "schema8 prompt_versions key #{key.inspect} must match prompt and positive number fields"
+            "schema1 prompt_versions key #{key.inspect} must match prompt and positive number fields"
     end
 
     def split_prompt_version_key(key)
       prompt, number = key.to_s.split("@", 2)
       unless prompt && !prompt.empty? && number&.match?(/\A[1-9]\d*\z/)
-        raise InvalidUseCaseDocumentError, "schema8 prompt_versions key must look like prompt@number"
+        raise InvalidUseCaseDocumentError, "schema1 prompt_versions key must look like prompt@number"
       end
 
       [prompt, number.to_i]
     end
 
-    def validate_v8_model_key!(key, raw)
+    def validate_schema1_model_key!(key, raw)
       provider, model = key.to_s.split(":", 2)
       unless provider && model && !provider.empty? && !model.empty? &&
              string_or_nil(raw["provider"]) == provider && string_or_nil(raw["model"]) == model
         raise InvalidUseCaseDocumentError,
-              "schema8 models key #{key.inspect} must match provider and model fields"
+              "schema1 models key #{key.inspect} must match provider and model fields"
       end
     end
 
-    def validate_v8_references!
+    def validate_schema1_references!
       @deployments.each do |key, deployment|
         unless @models[deployment.model_id]
-          raise InvalidUseCaseDocumentError, "schema8 deployment #{key} references unknown model"
+          raise InvalidUseCaseDocumentError, "schema1 deployment #{key} references unknown model"
         end
 
         use_case = @use_cases[key]
         next if use_case&.kind == "embedding"
 
         unless deployment.prompt_version&.positive?
-          raise InvalidUseCaseDocumentError, "schema8 deployment #{key} prompt_version must be a positive integer"
+          raise InvalidUseCaseDocumentError, "schema1 deployment #{key} prompt_version must be a positive integer"
+        end
+
+        if deployment.prompt_pins.empty?
+          raise InvalidUseCaseDocumentError, "schema1 deployment #{key} must pin a prompt version"
         end
 
         version_key = "#{key}@#{deployment.prompt_version}"
-        next if @prompt_versions[version_key]
+        unless deployment.prompt_pins[DEFAULT_PROMPT] == version_key
+          raise InvalidUseCaseDocumentError, "schema1 deployment #{key} default prompt pin must match prompt_version"
+        end
 
-        raise InvalidUseCaseDocumentError, "schema8 deployment #{key} references unknown prompt version #{version_key}"
+        version = @prompt_versions[version_key]
+        unless version
+          raise InvalidUseCaseDocumentError,
+                "schema1 deployment #{key} references unknown prompt version #{version_key}"
+        end
+        next if version.prompt == key
+
+        raise InvalidUseCaseDocumentError,
+              "schema1 deployment #{key} prompt version references prompt #{version.prompt}"
       end
     end
   end

@@ -6,7 +6,7 @@ module PromptOn
     attr_reader :kind, :prompt, :prompt_names, :deployment_id,
                 :deployment_revision, :prompt_version_id, :prompt_version_number, :engine,
                 :model, :model_id, :provider, :params, :provider_options,
-                :input_schema, :source, :etag, :payload_policy, :warnings
+                :variables, :source, :etag, :payload_policy, :warnings
 
     def initialize(client, evidence)
       @client = client
@@ -23,6 +23,10 @@ module PromptOn
 
     def text_template
       @evidence.text
+    end
+
+    def decision_template
+      @evidence.decision
     end
 
     def detected_variables
@@ -43,6 +47,17 @@ module PromptOn
       selected = select(prompt: prompt)
       replace_evidence(selected)
       raise TemplateError, "use case #{key} is of kind #{selected.kind}, not text" unless selected.kind == "text"
+
+      selected.render(variables)
+    end
+
+    def decision(variables = {}, prompt: nil, **keyword_variables)
+      variables = normalize_variables(variables, keyword_variables)
+      selected = select(prompt: prompt)
+      replace_evidence(selected)
+      unless selected.kind == "decision"
+        raise TemplateError, "use case #{key} is of kind #{selected.kind}, not decision"
+      end
 
       selected.render(variables)
     end
@@ -83,7 +98,8 @@ module PromptOn
       @provider = evidence.provider
       @params = evidence.params
       @provider_options = evidence.provider_options
-      @input_schema = evidence.input_schema
+      @decision_template = evidence.decision
+      @variables = evidence.variables
       @source = evidence.source
       @etag = evidence.etag
       @payload_policy = evidence.payload_policy

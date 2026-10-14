@@ -10,7 +10,8 @@ module PromptOn
     attr_reader :use_case, :kind, :prompt, :prompt_names, :deployment_id,
                 :deployment_revision, :prompt_version_id, :prompt_version_number, :engine,
                 :model, :model_id, :provider, :params, :provider_options, :messages, :text,
-                :input_schema, :source, :etag, :payload_policy, :api, :request_path, :tools, :warnings
+                :decision, :variables, :source, :etag, :payload_policy, :api, :request_path,
+                :tools, :warnings
 
     def initialize(**attributes)
       @use_case = attributes[:use_case]
@@ -29,7 +30,8 @@ module PromptOn
       @provider_options = attributes[:provider_options] || {}
       @messages = attributes[:messages]
       @text = attributes[:text]
-      @input_schema = attributes[:input_schema] || []
+      @decision = attributes[:decision]
+      @variables = attributes[:variables] || []
       @source = attributes[:source] || "remote"
       @etag = attributes[:etag]
       @payload_policy = attributes[:payload_policy]
@@ -52,6 +54,10 @@ module PromptOn
         raise TemplateError, "use case #{use_case} pins no text template" if text.nil?
 
         Template.render(text, variables, engine: engine)
+      when "decision"
+        raise TemplateError, "use case #{use_case} pins no decision payload" if decision.nil?
+
+        render_value(decision, variables)
       else
         raise TemplateError, "use case #{use_case} is of kind #{kind} and has no prompt to render"
       end
@@ -64,6 +70,7 @@ module PromptOn
       case kind
       when "chat" then with(messages: rendered)
       when "text" then with(text: rendered)
+      when "decision" then with(decision: rendered)
       else self
       end
     end
@@ -75,7 +82,11 @@ module PromptOn
 
     # The input variables the pinned prompt reads, sorted.
     def detected_variables
-      sources = kind == "chat" ? Array(@messages).map { |m| m["content"].to_s } : [@text.to_s]
+      sources = case kind
+                when "chat" then Array(@messages).map { |m| m["content"].to_s }
+                when "decision" then decision_sources(@decision)
+                else [@text.to_s]
+                end
       sources.flat_map { |source| Template.variables(source) }.uniq.sort
     end
 
@@ -85,8 +96,8 @@ module PromptOn
         deployment_id: deployment_id, deployment_revision: deployment_revision,
         prompt_version_id: prompt_version_id, prompt_version_number: prompt_version_number,
         engine: engine, model: model, model_id: model_id, provider: provider, params: params,
-        provider_options: provider_options, messages: @messages, text: @text,
-        input_schema: input_schema, source: source, etag: etag, payload_policy: payload_policy,
+        provider_options: provider_options, messages: @messages, text: @text, decision: @decision,
+        variables: variables, source: source, etag: etag, payload_policy: payload_policy,
         api: api, request_path: request_path, tools: tools, warnings: warnings }
     end
 
@@ -94,11 +105,40 @@ module PromptOn
       { "use_case" => use_case, "kind" => kind, "prompt" => prompt, "prompt_names" => prompt_names,
         "deployment" => { "id" => deployment_id, "revision" => deployment_revision },
         "model" => model, "model_id" => model_id, "provider" => provider,
-        "params" => params, "provider_options" => provider_options,
+        "params" => params, "provider_options" => provider_options, "variables" => variables,
         "prompt_version" => prompt_version_number && { "id" => prompt_version_id,
                                                        "number" => prompt_version_number }.compact,
-        "messages" => @messages, "text" => @text, "api" => api, "request_path" => request_path,
+        "messages" => @messages, "text" => @text, "decision" => @decision,
+        "api" => api, "request_path" => request_path,
         "tools" => tools, "source" => source, "etag" => etag, "warnings" => warnings.map(&:to_s) }.compact
+    end
+
+    private
+
+    def render_value(value, variables)
+      case value
+      when Hash
+        value.transform_values { |item| render_value(item, variables) }
+      when Array
+        value.map { |item| render_value(item, variables) }
+      when String
+        Template.render(value, variables, engine: engine)
+      else
+        value
+      end
+    end
+
+    def decision_sources(value)
+      case value
+      when Hash
+        value.values.flat_map { |item| decision_sources(item) }
+      when Array
+        value.flat_map { |item| decision_sources(item) }
+      when String
+        [value]
+      else
+        []
+      end
     end
   end
 end

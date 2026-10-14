@@ -326,33 +326,33 @@ class SnapshotCacheTest < Minitest::Test
     assert_equal "bundle", offline.use_case("greeting").source
   end
 
-  def test_legacy_full_cache_can_merge_schema8_prompt_and_export_reloads_it
+  def test_legacy_full_cache_can_merge_schema1_prompt_and_export_reloads_it
     File.write(bundle_path, prompt_json("greeting"))
-    @state["summarize"][:body] = schema8_prompt_json("summarize")
-    @state["summarize"][:etag] = "\"schema8-summarize\""
+    @state["summarize"][:body] = schema1_prompt_json("summarize")
+    @state["summarize"][:etag] = "\"schema1-summarize\""
     client = build_client(bundle: bundle_path)
 
     assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model
     assert_equal "openai/gpt-4o-mini", client.use_case("summarize").model
-    assert_equal "\"schema8-summarize\"", client.use_case("summarize").etag
+    assert_equal "\"schema1-summarize\"", client.use_case("summarize").etag
 
     client.export_use_case_document(bundle_path)
     exported = JSON.parse(File.read(bundle_path))
     offline = build_client(mode: :offline, api_key: nil, disk_cache: false, bundle: bundle_path)
 
-    assert_operator exported["schema_version"], :<, 8
-    assert exported.dig("use_cases", "summarize"), "legacy export should keep schema8 prompt under use_cases"
+    assert_equal 1, exported["schema_version"]
+    assert exported.dig("prompts", "summarize"), "export should keep schema1 prompt under prompts"
     assert_equal "bundle", offline.use_case("summarize").source
     assert_equal 1, offline.use_case("summarize").prompt_version_number
     assert_equal [{ "role" => "user", "content" => "Say hello to Ada." }],
                  offline.use_case("summarize").messages("name" => "Ada")
   end
 
-  def test_two_schema8_prompt_fetches_merge_into_readable_export
-    @state["greeting"][:body] = schema8_prompt_json("greeting")
-    @state["greeting"][:etag] = "\"schema8-greeting\""
-    @state["summarize"][:body] = schema8_prompt_json("summarize")
-    @state["summarize"][:etag] = "\"schema8-summarize\""
+  def test_two_schema1_prompt_fetches_merge_into_readable_export
+    @state["greeting"][:body] = schema1_prompt_json("greeting")
+    @state["greeting"][:etag] = "\"schema1-greeting\""
+    @state["summarize"][:body] = schema1_prompt_json("summarize")
+    @state["summarize"][:etag] = "\"schema1-summarize\""
     client = build_client
 
     assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model
@@ -362,7 +362,7 @@ class SnapshotCacheTest < Minitest::Test
     exported = JSON.parse(File.read(bundle_path))
     offline = build_client(mode: :offline, api_key: nil, disk_cache: false, bundle: bundle_path)
 
-    assert_equal 8, exported["schema_version"]
+    assert_equal 1, exported["schema_version"]
     assert_equal %w[greeting summarize], exported.fetch("prompts").keys.sort
     assert_equal %w[greeting@1 summarize@1], exported.fetch("prompt_versions").keys.sort
     refute exported.key?("use_cases")
@@ -370,10 +370,10 @@ class SnapshotCacheTest < Minitest::Test
     assert_equal "bundle", offline.use_case("summarize").source
   end
 
-  def test_schema8_prompt_fetch_preserves_readable_cache_and_export_shape
-    body = schema8_prompt_json("greeting")
+  def test_schema1_prompt_fetch_preserves_readable_cache_and_export_shape
+    body = schema1_prompt_json("greeting")
     @state["greeting"][:body] = body
-    @state["greeting"][:etag] = "\"schema8-greeting\""
+    @state["greeting"][:etag] = "\"schema1-greeting\""
     disk_path = File.join(@dir, "cache.json")
     client = build_client(disk_cache: disk_path)
 
@@ -385,22 +385,22 @@ class SnapshotCacheTest < Minitest::Test
     offline = build_client(mode: :offline, api_key: nil, disk_cache: false, bundle: bundle_path)
 
     assert_equal "bundle", offline.use_case("greeting").source
-    assert_equal 8, exported["schema_version"]
+    assert_equal 1, exported["schema_version"]
     assert exported.key?("prompts")
-    refute_match(/\b(id|model_id|prompt_pins|template_pins|prompt_template_id)\b/, JSON.generate(exported))
+    refute_match(/\b(id|model_id|template_pins|prompt_template_id)\b/, JSON.generate(exported))
   end
 
-  def test_schema9_single_prompt_fetch_preserves_raw_cache_and_reloads_export
-    body = schema9_prompt_json("greeting")
+  def test_schema1_single_prompt_fetch_preserves_raw_cache_and_reloads_export
+    body = schema1_single_prompt_json("greeting")
     @state["greeting"][:body] = body
-    @state["greeting"][:etag] = "\"schema9-greeting\""
+    @state["greeting"][:etag] = "\"schema1-greeting\""
     disk_path = File.join(@dir, "cache.json")
     client = build_client(disk_cache: disk_path)
 
     assert_equal "openai/gpt-4o-mini", client.use_case("greeting").model
 
     assert_equal body, File.read(disk_path)
-    assert_equal 9, JSON.parse(File.read(disk_path))["schema_version"]
+    assert_equal 1, JSON.parse(File.read(disk_path))["schema_version"]
 
     client.export_use_case_document(bundle_path)
     assert_equal body, File.read(bundle_path)
@@ -431,21 +431,25 @@ class SnapshotCacheTest < Minitest::Test
 
   def prompt_json_with_model(key, model)
     document = snapshot_document
-    model_id = document.dig("deployments", key, "model_id")
-    document.fetch("models").fetch(model_id)["model_id"] = model
+    old_model_key = "#{document.dig("deployments", key, "provider")}:#{document.dig("deployments", key, "model")}"
+    provider = document.dig("deployments", key, "provider")
+    document["deployments"][key]["model"] = model
+    model_entry = document.fetch("models").delete(old_model_key)
+    model_entry["model"] = model
+    document["models"]["#{provider}:#{model}"] = model_entry
     keep_prompt!(document, key)
     JSON.generate(document)
   end
 
-  def schema8_prompt_json(key)
+  def schema1_prompt_json(key)
     JSON.generate(
-      "schema_version" => 8,
+      "schema_version" => 1,
       "project" => "sdkfixture",
       "environment" => "production",
       "prompts" => {
         key => {
           "kind" => "chat",
-          "input_schema" => [{ "name" => "name", "type" => "string", "required" => true }],
+          "variables" => [{ "name" => "name", "type" => "string", "required" => true }],
           "default_params" => { "max_tokens" => 256 },
           "payload_policy" => { "mode" => "full", "sample_rate" => 1.0, "max_bytes" => 262_144 }
         }
@@ -473,13 +477,13 @@ class SnapshotCacheTest < Minitest::Test
     )
   end
 
-  def schema9_prompt_json(key)
-    bulk = JSON.parse(schema8_prompt_json(key))
+  def schema1_single_prompt_json(key)
+    bulk = JSON.parse(schema1_prompt_json(key))
     deployment = bulk.fetch("deployments").fetch(key)
     version = bulk.fetch("prompt_versions").fetch("#{key}@#{deployment.fetch("prompt_version")}")
     model = bulk.fetch("models").fetch("#{deployment.fetch("provider")}:#{deployment.fetch("model")}")
     JSON.generate(
-      "schema_version" => 9,
+      "schema_version" => 1,
       "project" => bulk["project"],
       "environment" => bulk["environment"],
       "prompt" => bulk.fetch("prompts").fetch(key).merge("key" => key),
@@ -490,12 +494,13 @@ class SnapshotCacheTest < Minitest::Test
   end
 
   def keep_prompt!(document, key)
-    document["use_cases"].select! { |candidate, _| candidate == key }
+    document["prompts"].select! { |candidate, _| candidate == key }
     document["deployments"].select! { |candidate, _| candidate == key }
-    version_ids = document.dig("deployments", key, "prompt_pins")&.values || []
-    model_id = document.dig("deployments", key, "model_id")
-    document["prompt_versions"].select! { |id, _| version_ids.include?(id) }
-    document["models"].select! { |id, _| id == model_id }
+    version_number = document.dig("deployments", key, "prompt_version")
+    version_id = version_number ? "#{key}@#{version_number}" : nil
+    model_key = "#{document.dig("deployments", key, "provider")}:#{document.dig("deployments", key, "model")}"
+    document["prompt_versions"].select! { |id, _| id == version_id }
+    document["models"].select! { |id, _| id == model_key }
   end
 
   def respond(request)

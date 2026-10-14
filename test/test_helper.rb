@@ -53,76 +53,66 @@ module PromptOnTest
   # A snapshot document with the three kinds of use case, ready to serve or write to disk.
   def snapshot_document(environment: "production", project: "sdkfixture", temperature: 0.2)
     {
-      "schema_version" => 4, "project" => project, "environment" => environment,
-      "use_cases" => {
+      "schema_version" => 1, "project" => project, "environment" => environment,
+      "prompts" => {
         "greeting" => {
-          "id" => "0198f2a1-0000-7000-8000-00000000c001", "kind" => "chat",
-          "input_schema" => [{ "name" => "name", "type" => "string", "required" => true }],
+          "kind" => "chat",
+          "variables" => [{ "name" => "name", "type" => "string", "required" => true }],
           "default_params" => { "temperature" => 0.7, "max_tokens" => 512 },
           "payload_policy" => { "mode" => "full", "sample_rate" => 1.0, "max_bytes" => 262_144 }
         },
         "summarize" => {
-          "id" => "0198f2a1-0000-7000-8000-00000000c002", "kind" => "text",
-          "input_schema" => [], "default_params" => {}, "payload_policy" => nil
+          "kind" => "text", "variables" => [], "default_params" => {}, "payload_policy" => nil
         },
         "embed" => {
-          "id" => "0198f2a1-0000-7000-8000-00000000c003", "kind" => "embedding",
-          "input_schema" => [], "default_params" => {}, "payload_policy" => nil
+          "kind" => "embedding", "variables" => [], "default_params" => {}, "payload_policy" => nil
         },
         "draft" => {
-          "id" => "0198f2a1-0000-7000-8000-00000000c004", "kind" => "chat",
-          "input_schema" => [], "default_params" => {}, "payload_policy" => nil
+          "kind" => "chat", "variables" => [], "default_params" => {}, "payload_policy" => nil
         }
       },
       "deployments" => {
         "greeting" => {
-          "id" => "0198f2a1-0000-7000-8000-00000000d001", "revision" => "v2026.09.30-3",
-          "model_id" => "0198f2a1-0000-7000-8000-00000000e001",
-          "params" => { "temperature" => temperature },
-          "provider_options" => { "allow_fallbacks" => true, "sort" => nil },
-          "prompt_pins" => { "default" => "0198f2a1-0000-7000-8000-00000000a001",
-                             "ko" => "0198f2a1-0000-7000-8000-00000000a002" }
+          "revision" => "v2026.09.30-3", "provider" => "openrouter", "model" => "openai/gpt-4o-mini",
+          "prompt_version" => 2, "params" => { "temperature" => temperature },
+          "provider_options" => { "allow_fallbacks" => true, "sort" => nil }
         },
         "summarize" => {
-          "id" => "0198f2a1-0000-7000-8000-00000000d002", "revision" => "v2026.09.30-1",
-          "model_id" => "0198f2a1-0000-7000-8000-00000000e001", "params" => {},
-          "provider_options" => {},
-          "prompt_pins" => { "default" => "0198f2a1-0000-7000-8000-00000000a003" }
+          "revision" => "v2026.09.30-1", "provider" => "openrouter", "model" => "openai/gpt-4o-mini",
+          "prompt_version" => 4, "params" => {}, "provider_options" => {}
         },
         "embed" => {
-          "id" => "0198f2a1-0000-7000-8000-00000000d003", "revision" => "v2026.09.30-2",
-          "model_id" => "0198f2a1-0000-7000-8000-00000000e002",
-          "params" => { "dimensions" => 256 }, "provider_options" => {}, "prompt_pins" => {}
+          "revision" => "v2026.09.30-2", "provider" => "openrouter",
+          "model" => "openai/text-embedding-3-small", "params" => { "dimensions" => 256 },
+          "provider_options" => {}
         }
       },
       "prompt_versions" => {
-        "0198f2a1-0000-7000-8000-00000000a001" => {
-          "id" => "0198f2a1-0000-7000-8000-00000000a001", "number" => 2, "engine" => "liquid",
+        "greeting@2" => {
+          "prompt" => "greeting", "number" => 2, "kind" => "chat", "engine" => "liquid",
           "messages" => [{ "role" => "system", "content" => "You are a friendly greeter." },
                          { "role" => "user", "content" => "Say hello to {{ name }}." }],
           "text_template" => nil
         },
-        "0198f2a1-0000-7000-8000-00000000a002" => {
-          "id" => "0198f2a1-0000-7000-8000-00000000a002", "number" => 1, "engine" => "liquid",
+        "greeting@1" => {
+          "prompt" => "greeting", "number" => 1, "kind" => "chat", "engine" => "liquid",
           "messages" => [{ "role" => "system", "content" => "너는 친절한 인사 도우미다." },
                          { "role" => "user", "content" => "{{ name }}님에게 인사해줘." }],
           "text_template" => nil
         },
-        "0198f2a1-0000-7000-8000-00000000a003" => {
-          "id" => "0198f2a1-0000-7000-8000-00000000a003", "number" => 4, "engine" => "liquid",
+        "summarize@4" => {
+          "prompt" => "summarize", "number" => 4, "kind" => "text", "engine" => "liquid",
           "messages" => [], "text_template" => "Summarize:\n{% for item in items %}- {{ item }}\n{% endfor %}"
         }
       },
       "models" => {
-        "0198f2a1-0000-7000-8000-00000000e001" => {
-          "id" => "0198f2a1-0000-7000-8000-00000000e001", "provider" => "openrouter",
-          "model_id" => "openai/gpt-4o-mini", "display_name" => "GPT-4o mini", "metadata" => {},
-          "provider_options" => { "allow_fallbacks" => false, "only" => ["OpenAI"] },
+        "openrouter:openai/gpt-4o-mini" => {
+          "provider" => "openrouter", "model" => "openai/gpt-4o-mini", "display_name" => "GPT-4o mini",
+          "metadata" => {}, "provider_options" => { "allow_fallbacks" => false, "only" => ["OpenAI"] },
           "capabilities" => %w[tools streaming], "status" => "active"
         },
-        "0198f2a1-0000-7000-8000-00000000e002" => {
-          "id" => "0198f2a1-0000-7000-8000-00000000e002", "provider" => "openrouter",
-          "model_id" => "openai/text-embedding-3-small", "display_name" => "embedding",
+        "openrouter:openai/text-embedding-3-small" => {
+          "provider" => "openrouter", "model" => "openai/text-embedding-3-small", "display_name" => "embedding",
           "metadata" => {}, "provider_options" => {}, "capabilities" => [], "status" => "active"
         }
       }

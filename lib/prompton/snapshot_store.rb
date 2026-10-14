@@ -331,12 +331,11 @@ module PromptOn
     def merge_documents(existing, incoming, key)
       merged = existing ? document_to_h(existing) : base_document(incoming)
       incoming_hash = document_to_h(incoming)
-      prompt_collection = prompt_collection_name(merged)
-      incoming_prompts = incoming_hash["use_cases"] || incoming_hash["prompts"]
+      incoming_prompts = incoming_hash["prompts"]
       if incoming_prompts.is_a?(Hash) && incoming_prompts.key?(key)
-        merged.delete(prompt_collection == "prompts" ? "use_cases" : "prompts")
-        merged[prompt_collection] ||= {}
-        merged[prompt_collection][key] = incoming_prompts[key]
+        merged.delete("use_cases")
+        merged["prompts"] ||= {}
+        merged["prompts"][key] = incoming_prompts[key]
       end
       if incoming_hash["deployments"].is_a?(Hash) && incoming_hash["deployments"].key?(key)
         merged["deployments"] ||= {}
@@ -349,62 +348,23 @@ module PromptOn
       UseCaseDocument.from_hash(merged)
     end
 
-    def prompt_collection_name(document)
-      document["schema_version"].to_i >= 8 ? "prompts" : "use_cases"
-    end
-
     def base_document(data)
-      { "schema_version" => data.schema_version == 9 ? 8 : data.schema_version, "project" => data.project,
-        "environment" => data.environment, "use_cases" => {}, "deployments" => {},
+      { "schema_version" => 1, "project" => data.project,
+        "environment" => data.environment, "prompts" => {}, "deployments" => {},
         "prompt_versions" => {}, "models" => {} }
     end
 
     def document_to_h(data)
-      return schema8_document_to_h(data) if data.schema_version >= 8
-
-      {
-        "schema_version" => data.schema_version,
-        "project" => data.project,
-        "environment" => data.environment,
-        "use_cases" => data.use_cases.transform_values do |use_case|
-          { "id" => use_case.id, "kind" => use_case.kind,
-            "input_schema" => use_case.input_schema, "default_params" => use_case.default_params,
-            "payload_policy" => payload_policy_to_h(use_case.payload_policy) }.compact
-        end,
-        "deployments" => data.deployments.transform_values do |deployment|
-          { "id" => deployment.id, "use_case_key" => deployment.use_case_key,
-            "revision" => deployment.revision, "model_id" => deployment.model_id,
-            "provider" => deployment.provider, "model" => deployment.model,
-            "prompt_version" => deployment.prompt_version,
-            "params" => deployment.params, "provider_options" => deployment.provider_options,
-            "prompt_pins" => deployment.prompt_pins, "api" => deployment.api,
-            "request_path" => deployment.request_path }.compact
-        end,
-        "prompt_versions" => data.prompt_versions.transform_values do |version|
-          { "id" => version.id, "prompt_id" => version.prompt_id, "prompt" => version.prompt,
-            "number" => version.number,
-            "engine" => version.engine, "messages" => version.messages,
-            "text_template" => version.text_template, "kind" => version.kind,
-            "decision" => version.decision, "tools" => version.tools }.compact
-        end,
-        "models" => data.models.transform_values do |model|
-          { "id" => model.id, "provider" => model.provider, "model_id" => model.model_id,
-            "model" => model.model_id,
-            "display_name" => model.display_name, "metadata" => model.metadata,
-            "provider_options" => model.provider_options, "capabilities" => model.capabilities,
-            "pricing" => model.pricing, "context_length" => model.context_length,
-            "status" => model.status }.compact
-        end
-      }
+      schema1_document_to_h(data)
     end
 
-    def schema8_document_to_h(data)
+    def schema1_document_to_h(data)
       {
-        "schema_version" => data.schema_version == 9 ? 8 : data.schema_version,
+        "schema_version" => 1,
         "project" => data.project,
         "environment" => data.environment,
         "prompts" => data.use_cases.transform_values do |use_case|
-          { "kind" => use_case.kind, "input_schema" => use_case.input_schema,
+          { "kind" => use_case.kind, "variables" => use_case.variables,
             "default_params" => use_case.default_params,
             "payload_policy" => payload_policy_to_h(use_case.payload_policy) }.compact
         end,

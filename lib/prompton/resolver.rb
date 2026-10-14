@@ -43,7 +43,8 @@ module PromptOn
         provider_options: Params.merge(model&.provider_options, deployment.provider_options),
         messages: runtime_kind == "chat" ? version&.messages : nil,
         text: runtime_kind == "text" ? version&.text_template : nil,
-        input_schema: use_case.input_schema, source: source.to_s, etag: etag,
+        decision: runtime_kind == "decision" ? version&.decision : nil,
+        variables: use_case.variables, source: source.to_s, etag: etag,
         payload_policy: use_case.payload_policy, api: deployment.api, request_path: deployment.request_path,
         tools: runtime_kind == "chat" ? version&.tools : nil, warnings: warnings
       )

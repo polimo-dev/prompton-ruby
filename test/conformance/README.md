@@ -53,7 +53,7 @@ the prompt version is committed, so a template that fails lint can never reach a
 ### prompt.json
 
 `documents` is a map of reference name → a complete schema-v5 prompt document, exactly as
-`GET /api/v1/prompts?environment=…` returns it. For each case, decode
+`GET /api/v1/prompts/:key?environment=… detail or an offline aggregate bundle` returns it. For each case, decode
 `documents[document_ref]`, look up `prompt_key` with the optional `prompt` name, and — when
 `variables` is present — render the resulting prompt. This is precisely what `POST /api/v1/prompts/{key}/render`
 does on the server.

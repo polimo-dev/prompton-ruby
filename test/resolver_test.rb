@@ -22,15 +22,12 @@ class ResolverTest < Minitest::Test
     assert_nil resolution.provider_options["sort"]
   end
 
-  def test_the_prompt_name_is_the_only_selection_axis
+  def test_the_default_prompt_is_selected
     default = PromptOn::Resolver.resolve(@snapshot, "greeting")
-    korean = PromptOn::Resolver.resolve(@snapshot, "greeting", prompt: "ko")
 
     assert_equal "default", default.prompt
-    assert_equal "ko", korean.prompt
-    assert_equal %w[default ko], korean.prompt_names
-    refute_equal default.prompt_version_id, korean.prompt_version_id
-    assert_equal default.model, korean.model
+    assert_equal ["default"], default.prompt_names
+    assert_equal 2, default.prompt_version_number
   end
 
   def test_an_unpinned_prompt_name_never_falls_back_to_default
@@ -39,7 +36,7 @@ class ResolverTest < Minitest::Test
     end
 
     assert_equal "fr", error.prompt
-    assert_equal %w[default ko], error.prompt_names
+    assert_equal ["default"], error.prompt_names
     assert_equal "unknown_prompt", error.code
   end
 
@@ -49,7 +46,7 @@ class ResolverTest < Minitest::Test
   end
 
   def test_an_embedding_use_case_has_no_prompt_and_ignores_a_prompt_name
-    resolution = PromptOn::Resolver.resolve(@snapshot, "embed", prompt: "ko")
+    resolution = PromptOn::Resolver.resolve(@snapshot, "embed", prompt: "other")
 
     assert_equal "embedding", resolution.kind
     assert_nil resolution.prompt
@@ -65,21 +62,19 @@ class ResolverTest < Minitest::Test
     assert_equal ["items"], resolution.detected_variables
   end
 
-  def test_a_dangling_reference_still_resolves_with_warnings
+  def test_schema1_rejects_dangling_references
     document = snapshot_document
     document["prompt_versions"] = {}
     document["models"] = {}
-    resolution = PromptOn::Resolver.resolve(PromptOn::UseCaseDocument.from_hash(document), "greeting")
 
-    assert_nil resolution.model
-    assert_nil resolution.prompt_version_id
-    assert_equal ["missing_prompt_version: 0198f2a1-0000-7000-8000-00000000a001",
-                  "missing_model: 0198f2a1-0000-7000-8000-00000000e001"],
-                 resolution.warnings.map(&:to_s)
+    error = assert_raises(PromptOn::InvalidUseCaseDocumentError) do
+      PromptOn::UseCaseDocument.from_hash(document)
+    end
+    assert_match(/references unknown model/, error.message)
   end
 
-  def test_schema_version_accepts_current_and_legacy_supported_versions
-    [3, 10].each do |version|
+  def test_schema_version_accepts_only_current_version
+    [3, 4, 5, 6, 7, 8, 10].each do |version|
       error = assert_raises(PromptOn::UnsupportedSchemaVersionError) do
         PromptOn::UseCaseDocument.from_hash(snapshot_document.merge("schema_version" => version))
       end
@@ -91,13 +86,8 @@ class ResolverTest < Minitest::Test
     legacy = snapshot_document.except("schema_version").merge("version" => 4)
     assert_raises(PromptOn::InvalidUseCaseDocumentError) { PromptOn::UseCaseDocument.from_hash(legacy) }
 
-    [4, 5, 6, 7].each do |version|
-      data = PromptOn::UseCaseDocument.from_hash(snapshot_document.merge("schema_version" => version))
-      assert_equal version, data.schema_version
-      assert_equal "openai/gpt-4o-mini", PromptOn::Resolver.resolve(data, "greeting").model
-    end
-    data = PromptOn::UseCaseDocument.from_hash(schema8_snapshot_document)
-    assert_equal 8, data.schema_version
+    data = PromptOn::UseCaseDocument.from_hash(snapshot_document)
+    assert_equal 1, data.schema_version
     assert_equal "openai/gpt-4o-mini", PromptOn::Resolver.resolve(data, "greeting").model
   end
 
@@ -112,31 +102,7 @@ class ResolverTest < Minitest::Test
   end
 
   def test_prompt_names_lists_what_resolve_accepts
-    assert_equal %w[default ko], PromptOn::Resolver.prompt_names(@snapshot, "greeting")
+    assert_equal ["default"], PromptOn::Resolver.prompt_names(@snapshot, "greeting")
     assert_empty PromptOn::Resolver.prompt_names(@snapshot, "draft")
-  end
-
-  def schema8_snapshot_document
-    {
-      "schema_version" => 8,
-      "project" => "sdkfixture",
-      "environment" => "production",
-      "prompts" => {
-        "greeting" => { "kind" => "chat", "default_params" => {} }
-      },
-      "deployments" => {
-        "greeting" => { "revision" => "v2026.10.14-1", "provider" => "openrouter",
-                        "model" => "openai/gpt-4o-mini", "prompt_version" => 1 }
-      },
-      "prompt_versions" => {
-        "greeting@1" => { "prompt" => "greeting", "number" => 1, "kind" => "chat",
-                          "messages" => [{ "role" => "user", "content" => "hi" }] }
-      },
-      "models" => {
-        "openrouter:openai/gpt-4o-mini" => {
-          "provider" => "openrouter", "model" => "openai/gpt-4o-mini"
-        }
-      }
-    }
   end
 end

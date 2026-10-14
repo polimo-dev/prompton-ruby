@@ -291,35 +291,37 @@ module PromptOn
              params: {}, provider_options: {}, default_params: {}, provider: "openrouter",
              payload_policy: nil, engine: "liquid", revision: "v2026.09.30-1")
       key = use_case.to_s
+      raise ArgumentError, "stub only supports the default prompt" unless prompt.to_s == "default"
+
       document = @stub_document || base_stub_document
-      version_id = stub_id("version", key, prompt)
-      model_id = stub_id("model", key)
+      version_number = 1
+      version_id = "#{key}@#{version_number}"
+      model_key = "#{provider}:#{model}"
       existing = document.dig("deployments", key) || {}
-      pins = existing["prompt_pins"] || {}
 
       unless kind.to_s == "embedding"
-        pins = pins.merge(prompt.to_s => version_id)
         document["prompt_versions"][version_id] = {
-          "id" => version_id, "number" => 1, "engine" => engine,
+          "prompt" => key, "number" => version_number, "kind" => kind.to_s, "engine" => engine,
           "messages" => messages ? Params.deep_stringify(messages) : [], "text_template" => text
         }
       end
 
-      # Calling stub again for the same use case adds a pin rather than resetting the rest, so a
-      # second call that only names another prompt keeps the params the first one set.
-      document["use_cases"][key] = {
-        "id" => stub_id("use_case", key), "kind" => kind.to_s, "input_schema" => [],
-        "default_params" => merged(document.dig("use_cases", key, "default_params"), default_params),
-        "payload_policy" => payload_policy || document.dig("use_cases", key, "payload_policy")
+      # Calling stub again for the same use case replaces the current prompt version while keeping
+      # merged params/provider options from earlier stubs.
+      document["prompts"][key] = {
+        "kind" => kind.to_s, "variables" => [],
+        "default_params" => merged(document.dig("prompts", key, "default_params"), default_params),
+        "payload_policy" => payload_policy || document.dig("prompts", key, "payload_policy")
       }
-      document["deployments"][key] = {
-        "id" => stub_id("deployment", key), "revision" => revision, "model_id" => model_id,
+      deployment = {
+        "revision" => revision, "provider" => provider.to_s, "model" => model.to_s,
         "params" => merged(existing["params"], params),
-        "provider_options" => merged(existing["provider_options"], provider_options),
-        "prompt_pins" => pins
+        "provider_options" => merged(existing["provider_options"], provider_options)
       }
-      document["models"][model_id] = {
-        "id" => model_id, "provider" => provider.to_s, "model_id" => model.to_s,
+      deployment["prompt_version"] = version_number unless kind.to_s == "embedding"
+      document["deployments"][key] = deployment
+      document["models"][model_key] = {
+        "provider" => provider.to_s, "model" => model.to_s,
         "display_name" => model.to_s, "metadata" => {}, "provider_options" => {}, "capabilities" => []
       }
 
@@ -371,10 +373,8 @@ module PromptOn
     end
 
     def base_stub_document
-      # Test stubs keep the legacy multi-prompt pin shape because the public test helper lets one
-      # use case accumulate named prompts. Runtime fetch/cache/export uses schema8.
-      { "schema_version" => 7, "project" => @config.project,
-        "environment" => @config.environment, "use_cases" => {}, "deployments" => {},
+      { "schema_version" => 1, "project" => @config.project,
+        "environment" => @config.environment, "prompts" => {}, "deployments" => {},
         "prompt_versions" => {}, "models" => {} }
     end
 
